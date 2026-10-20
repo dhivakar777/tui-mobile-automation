@@ -29,7 +29,7 @@ public class LoginPage extends BasePage {
     private static final By SUBMIT_BUTTON = byTag("login_form_submit_button");
 
     public boolean isDisplayed() {
-        return waitForVisible(SCREEN_ROOT).isDisplayed();
+        return isVisible(SCREEN_ROOT);
     }
 
     public void enterUsername(String username) {

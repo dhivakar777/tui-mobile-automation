@@ -12,10 +12,16 @@ import java.util.List;
 import java.util.Locale;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
 
 public class ListingsSteps {
 
     private final ListingsData data = TestDataReader.read("listings.json", ListingsData.class);
+
+    @Then("the listings screen is displayed")
+    public void theListingsScreenIsDisplayed() {
+        assertTrue(new ListingsPage().isDisplayed(), "Listings screen should be displayed after login");
+    }
 
     @When("I select the {string} tab")
     public void iSelectTheTab(String tabName) {

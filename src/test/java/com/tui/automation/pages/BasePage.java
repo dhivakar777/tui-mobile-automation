@@ -5,6 +5,7 @@ import com.tui.automation.driver.DriverManager;
 import io.appium.java_client.AppiumBy;
 import io.appium.java_client.AppiumDriver;
 import org.openqa.selenium.By;
+import org.openqa.selenium.TimeoutException;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
@@ -28,5 +29,15 @@ public abstract class BasePage {
 
     protected WebElement waitForVisible(By locator) {
         return wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
+    }
+
+    /** Waits up to the explicit timeout; returns false instead of throwing when the element does not appear. */
+    protected boolean isVisible(By locator) {
+        try {
+            waitForVisible(locator);
+            return true;
+        } catch (TimeoutException e) {
+            return false;
+        }
     }
 }

@@ -17,7 +17,8 @@ Feature: Login
     And I select the valid date of birth in the calendar
     Then the date of birth field shows the selected date in ISO format
     When I submit the login form
-    Then only the "All" tab is selected
+    Then the listings screen is displayed
+    And only the "All" tab is selected
 
   Scenario: Password visibility can be toggled
     When I enter the valid password

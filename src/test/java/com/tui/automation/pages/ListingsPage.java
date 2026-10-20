@@ -45,7 +45,7 @@ public class ListingsPage extends BasePage {
     private static final Duration SCROLL_SETTLE = Duration.ofMillis(150);
 
     public boolean isDisplayed() {
-        return waitForVisible(SCREEN_ROOT).isDisplayed();
+        return isVisible(SCREEN_ROOT);
     }
 
     public void selectTab(Tab tab) {
