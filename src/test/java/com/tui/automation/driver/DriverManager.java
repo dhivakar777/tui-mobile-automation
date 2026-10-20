@@ -54,6 +54,11 @@ public final class DriverManager {
         return driver;
     }
 
+    /** False when session creation failed, so teardown code can skip driver calls such as screenshots. */
+    public static boolean hasDriver() {
+        return DRIVER.get() != null;
+    }
+
     /** Ends the session if one exists. Always clears the thread slot, even if quit() fails. */
     public static void quitDriver() {
         AppiumDriver driver = DRIVER.get();
