@@ -1,0 +1,9 @@
+{
+  "validUser": {
+    "username": "user1",
+    "password": "user1",
+    "dateOfBirth": "07/08/2009",
+    "dateOfBirthDisplayed": "2009-08-07"
+  },
+  "requiredFieldError": "Required"
+}
