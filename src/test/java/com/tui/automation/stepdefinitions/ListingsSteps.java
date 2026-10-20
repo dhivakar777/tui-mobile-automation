@@ -33,9 +33,8 @@ public class ListingsSteps {
         if (expected == null) {
             throw new IllegalArgumentException("No expected names for tab '" + tabName + "' in listings.json");
         }
-        List<String> actual = new ListingsPage().allCardNames();
-        assertEquals(actual.size(), expected.size(), "Number of cards on the " + tabName + " tab");
-        assertEquals(actual, expected, "Card names on the " + tabName + " tab, in display order");
+        // TestNG reports either the size difference or the first differing card, which pinpoints a mismatch.
+        assertEquals(new ListingsPage().allCardNames(), expected, "Card names on the " + tabName + " tab, in display order");
     }
 
     @Then("the first hotel cards show the expected details")

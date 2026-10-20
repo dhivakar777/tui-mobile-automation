@@ -1,8 +1,11 @@
 package com.tui.automation.pages;
 
 import io.appium.java_client.AppiumBy;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.openqa.selenium.By;
 import org.openqa.selenium.Rectangle;
+import org.openqa.selenium.StaleElementReferenceException;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.interactions.Pause;
 import org.openqa.selenium.interactions.PointerInput;
@@ -16,6 +19,8 @@ import java.util.Map;
 import java.util.TreeMap;
 
 public class ListingsPage extends BasePage {
+
+    private static final Logger LOG = LogManager.getLogger(ListingsPage.class);
 
     public enum Tab {
         ALL("top_app_bar_all_tab"),
@@ -35,6 +40,7 @@ public class ListingsPage extends BasePage {
             "new UiSelector().resourceIdMatches(\"content_card_hotel_name_[0-9]+\")");
     private static final String CARD_TAG_PREFIX = "content_card_";
     private static final int MAX_SCROLLS = 60;
+    private static final int STALE_READ_ATTEMPTS = 3;
     private static final Duration SCROLL_DURATION = Duration.ofMillis(400);
     private static final Duration SCROLL_SETTLE = Duration.ofMillis(150);
 
@@ -54,13 +60,13 @@ public class ListingsPage extends BasePage {
     /** Scrolls through the whole list and returns every card name in display order. */
     public List<String> allCardNames() {
         Map<Integer, String> namesByIndex = new TreeMap<>();
-        Map<Integer, String> visible = visibleCardNames();
+        Map<Integer, VisibleName> visible = visibleCardNames();
         for (int scrolls = 0; scrolls < MAX_SCROLLS; scrolls++) {
-            namesByIndex.putAll(visible);
+            visible.forEach((index, name) -> namesByIndex.put(index, name.text()));
             scrollDown();
-            Map<Integer, String> afterScroll = visibleCardNames();
-            // The end of the list is reached when a scroll brings no different cards into view.
-            if (afterScroll.keySet().equals(visible.keySet())) {
+            Map<Integer, VisibleName> afterScroll = visibleCardNames();
+            LOG.debug("Visible cards before scroll {} after scroll {}", visible, afterScroll);
+            if (afterScroll.equals(visible)) {
                 return new ArrayList<>(namesByIndex.values());
             }
             visible = afterScroll;
@@ -80,9 +86,9 @@ public class ListingsPage extends BasePage {
                         cardText("board_type", index),
                         price.get(0).findElement(AppiumBy.className("android.widget.TextView")).getText());
             }
-            Map<Integer, String> beforeScroll = visibleCardNames();
+            Map<Integer, VisibleName> beforeScroll = visibleCardNames();
             scrollDown();
-            if (visibleCardNames().keySet().equals(beforeScroll.keySet())) {
+            if (visibleCardNames().equals(beforeScroll)) {
                 break;
             }
         }
@@ -93,12 +99,29 @@ public class ListingsPage extends BasePage {
         return Boolean.parseBoolean(driver.findElement(byTag(tab.tag)).getAttribute("selected"));
     }
 
-    private Map<Integer, String> visibleCardNames() {
-        Map<Integer, String> visible = new TreeMap<>();
-        for (WebElement name : driver.findElements(CARD_NAMES)) {
-            visible.put(cardIndex(name), name.getText());
+    /**
+     * Card names on screen with their vertical position. The position matters for end-of-list detection:
+     * a tall card's name can stay visible after a real scroll, so only "same cards at the same place" means the
+     * list did not move.
+     */
+    private Map<Integer, VisibleName> visibleCardNames() {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                Map<Integer, VisibleName> visible = new TreeMap<>();
+                for (WebElement name : driver.findElements(CARD_NAMES)) {
+                    visible.put(cardIndex(name), new VisibleName(name.getText(), name.getRect().y));
+                }
+                return visible;
+            } catch (StaleElementReferenceException e) {
+                // The lazy list recomposed while it was being read; read the screen again.
+                if (attempt == STALE_READ_ATTEMPTS) {
+                    throw e;
+                }
+            }
         }
-        return visible;
+    }
+
+    private record VisibleName(String text, int y) {
     }
 
     /**
