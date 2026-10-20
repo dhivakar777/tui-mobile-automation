@@ -3,50 +3,31 @@ package com.tui.automation.config;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
-import java.util.Locale;
+import java.util.Optional;
 import java.util.Properties;
 
-/**
- * Resolves configuration values in priority order:
- * JVM system property (-Dkey=value) &gt; environment variable (KEY_NAME) &gt; config/&lt;platform&gt;.properties.
- * The platform file is selected with -Dplatform (default: android).
- */
+/** Reads settings from config/config.properties; any key can be overridden with -Dkey=value. */
 public final class ConfigManager {
 
-    private static final String PLATFORM = System.getProperty("platform", "android").toLowerCase(Locale.ROOT);
-    private static final Properties FILE_PROPERTIES = load("config/" + PLATFORM + ".properties");
+    private static final String CONFIG_FILE = "config/config.properties";
+    private static final Properties DEFAULTS = load();
 
     private ConfigManager() {
     }
 
-    public static String platform() {
-        return PLATFORM;
-    }
-
-    /** Returns the value for {@code key}, or an empty string when it is not set anywhere. */
+    /** Returns a required value, failing fast when it is missing or blank. */
     public static String get(String key) {
-        String systemValue = System.getProperty(key);
-        if (isSet(systemValue)) {
-            return systemValue.trim();
-        }
-        String envValue = System.getenv(toEnvName(key));
-        if (isSet(envValue)) {
-            return envValue.trim();
-        }
-        return FILE_PROPERTIES.getProperty(key, "").trim();
+        return getOptional(key).orElseThrow(() -> new IllegalStateException(
+                "Missing required configuration '" + key + "'. Set it in " + CONFIG_FILE + " or pass -D" + key + "=..."));
     }
 
-    public static String getRequired(String key) {
-        String value = get(key);
-        if (value.isEmpty()) {
-            throw new IllegalStateException("Missing required configuration '" + key + "'. Set it in config/"
-                    + PLATFORM + ".properties, as -D" + key + "=..., or as env var " + toEnvName(key));
-        }
-        return value;
+    public static Optional<String> getOptional(String key) {
+        String value = System.getProperty(key, DEFAULTS.getProperty(key, ""));
+        return value.isBlank() ? Optional.empty() : Optional.of(value.trim());
     }
 
     public static int getInt(String key) {
-        String value = getRequired(key);
+        String value = get(key);
         try {
             return Integer.parseInt(value);
         } catch (NumberFormatException e) {
@@ -54,28 +35,15 @@ public final class ConfigManager {
         }
     }
 
-    public static boolean getBoolean(String key) {
-        return Boolean.parseBoolean(getRequired(key));
-    }
-
-    private static boolean isSet(String value) {
-        return value != null && !value.isBlank();
-    }
-
-    private static String toEnvName(String key) {
-        return key.toUpperCase(Locale.ROOT).replace('.', '_');
-    }
-
-    private static Properties load(String resource) {
+    private static Properties load() {
         Properties properties = new Properties();
-        try (InputStream in = ConfigManager.class.getClassLoader().getResourceAsStream(resource)) {
+        try (InputStream in = ConfigManager.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
             if (in == null) {
-                throw new IllegalStateException("Configuration file not found on classpath: " + resource
-                        + " (check the -Dplatform value)");
+                throw new IllegalStateException("Configuration file not found on classpath: " + CONFIG_FILE);
             }
             properties.load(in);
         } catch (IOException e) {
-            throw new UncheckedIOException("Failed to read configuration file " + resource, e);
+            throw new UncheckedIOException("Failed to read " + CONFIG_FILE, e);
         }
         return properties;
     }

@@ -1,17 +1,29 @@
 package com.tui.automation.driver;
 
+import com.tui.automation.config.ConfigManager;
 import io.appium.java_client.AppiumDriver;
+import io.appium.java_client.android.AndroidDriver;
+import io.appium.java_client.android.options.UiAutomator2Options;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.openqa.selenium.WebDriverException;
+
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 
 /**
- * Owns the Appium session for the current thread. Each test thread gets its own driver,
- * so scenarios can later run in parallel without sharing sessions.
+ * Creates, exposes and ends the Appium session. The driver is held per thread,
+ * so scenarios can run in parallel without sharing a session.
  */
 public final class DriverManager {
 
     private static final Logger LOG = LogManager.getLogger(DriverManager.class);
     private static final ThreadLocal<AppiumDriver> DRIVER = new ThreadLocal<>();
+    private static final Duration NEW_COMMAND_TIMEOUT = Duration.ofSeconds(120);
 
     private DriverManager() {
     }
@@ -20,7 +32,17 @@ public final class DriverManager {
         if (DRIVER.get() != null) {
             throw new IllegalStateException("A driver is already running on thread " + Thread.currentThread().getName());
         }
-        DRIVER.set(DriverFactory.createDriver());
+        URL serverUrl = serverUrl();
+        UiAutomator2Options options = androidOptions();
+        LOG.info("Creating Android session on {} with capabilities {}", serverUrl, options.asMap());
+        try {
+            AndroidDriver driver = new AndroidDriver(serverUrl, options);
+            LOG.info("Session {} started on device {}", driver.getSessionId(), driver.getCapabilities().getCapability("deviceUDID"));
+            DRIVER.set(driver);
+        } catch (WebDriverException e) {
+            throw new IllegalStateException("Could not start an Appium session on " + serverUrl
+                    + ". Is the Appium server running and the device listed by 'adb devices'?", e);
+        }
     }
 
     public static AppiumDriver getDriver() {
@@ -45,6 +67,35 @@ public final class DriverManager {
             LOG.warn("Driver quit failed; the session may already be gone: {}", e.getMessage());
         } finally {
             DRIVER.remove();
+        }
+    }
+
+    private static UiAutomator2Options androidOptions() {
+        UiAutomator2Options options = new UiAutomator2Options()
+                .setAppPackage(ConfigManager.get("app.package"))
+                .setAppActivity(ConfigManager.get("app.activity"))
+                // Clear app data at session start so every scenario begins on a fresh login screen.
+                .setNoReset(false)
+                .setNewCommandTimeout(NEW_COMMAND_TIMEOUT)
+                .setDisableWindowAnimation(true);
+
+        ConfigManager.getOptional("device.udid").ifPresent(options::setUdid);
+        ConfigManager.getOptional("app.path").ifPresent(path -> {
+            Path apk = Path.of(path).toAbsolutePath();
+            if (!Files.isRegularFile(apk)) {
+                throw new IllegalStateException("Configured app.path does not exist: " + apk);
+            }
+            options.setApp(apk.toString());
+        });
+        return options;
+    }
+
+    private static URL serverUrl() {
+        String url = ConfigManager.get("appium.server.url");
+        try {
+            return URI.create(url).toURL();
+        } catch (IllegalArgumentException | MalformedURLException e) {
+            throw new IllegalStateException("Invalid appium.server.url: " + url, e);
         }
     }
 }
