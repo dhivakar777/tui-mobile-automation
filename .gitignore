@@ -1,0 +1,22 @@
+# Build output and test evidence
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Brazil workspace metadata (not part of this project)
+packageInfo
+.builder-mcp/
+
+# OS
+.DS_Store
+
+# Local overrides and secrets
+*.local.properties
+.env
+
+# Application binaries (provided locally or downloaded in CI)
+*.apk
+apps/
