@@ -11,9 +11,9 @@ Cucumber BDD and Maven. Five scenarios cover the login screen and the travel lis
 | Maven | 3.9+ | Enforced by `maven-enforcer-plugin` |
 | Appium server | 3.2.2 | Installed separately with npm, not a Maven dependency |
 | Appium UiAutomator2 driver | 7.0.0 | Android automation driver |
-| Appium java-client | 10.1.1 | Pinned; version 11 changes the driver API |
+| Appium java-client | 10.1.1 | Pinned |
 | Selenium | 4.44.0 | Pinned via `selenium-bom` because java-client declares a version range |
-| Cucumber JVM | 7.34.9 | `cucumber-java`, `cucumber-testng`; version 8 deprecates `cucumber-testng` |
+| Cucumber JVM | 7.34.9 | `cucumber-java`, `cucumber-testng` |
 | TestNG | 7.12.0 | Test engine behind the Cucumber runner |
 | Jackson | 2.22.4 | Reads JSON test data into Java records |
 | Log4j2 + SLF4J bridge | 2.26.1 | One logging configuration for framework and client logs |
@@ -55,15 +55,12 @@ src/test/java/com/tui/automation/
   stepdefinitions/           Gherkin steps translated into page-object calls and assertions
   runners/TestRunner         TestNG-based Cucumber runner
   utilities/TestDataReader   Loads JSON test data into records
-  utilities/LoginData        Shape of testdata/login.json
-  utilities/ListingsData     Shape of testdata/listings.json
 src/test/resources/
   features/login.feature     3 scenarios
   features/listings.feature  2 scenarios
   testdata/login.json        Credentials and date of birth
   testdata/listings.json     Expected listing names and card details
   config/config.properties   Default settings
-  log4j2.xml                 Console (INFO) and file (DEBUG) logging
 ```
 
 The dependency direction is one-way: **runner → feature → step → page → DriverManager → ConfigManager**.
@@ -149,18 +146,10 @@ anything you need to keep.
 
 ## Continuous integration
 
-**Not implemented.** A GitHub Actions workflow for Android was designed but put on hold, so this repository
-contains no `.github/workflows/` directory. The design, including the Android and iOS job strategy, is in
-`CROSS_PLATFORM_DESIGN.md`.
+**Not implemented.** This repository contains no workflow. The proposed design, including the Android and iOS
+job strategy, is in `CROSS_PLATFORM_DESIGN.md`.
 
 ## Troubleshooting
-
-**`INSTALL_FAILED_UPDATE_INCOMPATIBLE: … io.appium.uiautomator2.server … signatures do not match`**
-Helper apps from an older Appium install are still on the device. Remove them; Appium reinstalls matching versions:
-```bash
-adb uninstall io.appium.uiautomator2.server
-adb uninstall io.appium.uiautomator2.server.test
-```
 
 **`Could not start an Appium session … Is the Appium server running?`**
 Check `curl http://127.0.0.1:4723/status` and `adb devices`. A device shown as `unauthorized` needs the USB
@@ -173,17 +162,6 @@ No device is attached, or several are and none was chosen. Pass `-Ddevice.udid=<
 The app is built with Jetpack Compose, whose test tags are exposed as resource-ids **without** a package
 prefix, which `AppiumBy.id` cannot match. The framework locates them with
 `new UiSelector().resourceId("...")` in `BasePage.byTag()`. Use that helper for new locators.
-
-**`InvalidElementStateException: Unable to perform W3C actions`** (`Input event injection failed` in logcat)
-Android refused the synthetic touch, usually because a notification, system dialog or a real finger took over
-the screen. Put the device in Do Not Disturb and leave it alone while tests run. This was seen once in four runs.
-
-**Images never load and screenshots look broken**
-Check for a leftover HTTP proxy on the device and clear it:
-```bash
-adb shell settings get global http_proxy
-adb shell settings put global http_proxy :0
-```
 
 **`Missing required configuration '<key>'`**
 Set it in `config/config.properties` or pass `-D<key>=...`.
@@ -198,7 +176,7 @@ itself uses; that can differ from your shell's `java -version`.
 ## Current limitations
 
 - **Android only.** iOS, device clouds and cross-platform execution are design-only; see `CROSS_PLATFORM_DESIGN.md`.
-- **No CI pipeline.** Phase 10 is on hold.
+- **No CI pipeline.** No workflow is included in this repository.
 - **Retry and parallel execution are not implemented.** `DriverManager` keeps one driver per thread, which is a
   precondition for parallel execution, but parallel execution has never been enabled or verified. Single
   device, single thread today.

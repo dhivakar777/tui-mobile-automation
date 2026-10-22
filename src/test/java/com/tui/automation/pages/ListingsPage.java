@@ -125,9 +125,7 @@ public class ListingsPage extends BasePage {
     }
 
     /**
-     * Drags the list up by 60% of its height; the overlap between screens ensures no card name is
-     * skipped (80% occasionally skipped one). A W3C touch drag is used instead of "mobile: scrollGesture",
-     * which takes ~2.5 s per call on this Compose list and always reports that it cannot scroll further.
+     * Drags the list up by 60% of its height; the overlap between screens keeps card names from being skipped.
      * The pause before release stops the list from flinging.
      */
     private void scrollDown() {

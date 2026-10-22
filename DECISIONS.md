@@ -1,226 +1,239 @@
-# Design decisions
+# Design Decisions
 
-Why this framework is shaped the way it is, what was rejected, and which of the original requirements are
-actually implemented. Cross-platform, CI and parallel execution design lives in `CROSS_PLATFORM_DESIGN.md`;
-setup and usage live in `README.md`.
+Android UI automation for `TUIChallengeApp.apk`. Setup and usage: `README.md`. Extended cross-platform notes:
+`CROSS_PLATFORM_DESIGN.md`.
 
-## 1. Discovery before implementation
+## Technology and Project Structure
 
-Nothing application-specific was written until the app had been inspected on a real device:
+Appium (java-client 10.1.1) + Java 17 + Cucumber BDD 7.34.9 + TestNG 7.12.0 + Maven, driving Android through
+the UiAutomator2 driver. Jackson reads JSON test data; Log4j2 handles logging.
 
-- `aapt dump badging` gave the package (`com.tui.qa.challenge`) and launch activity (`MainActivity`), so
-  neither was guessed.
-- `unzip -l` revealed `assets/hotel-results.json` and `assets/holiday-results.json` bundled in the APK. The
-  expected listing values in `testdata/listings.json` were extracted from those files, so assertions compare
-  the UI against the app's own data source rather than hand-copied numbers.
-- Live `uiautomator dump` output provided every locator. The app is Jetpack Compose with
-  `testTagsAsResourceId` enabled, which is why stable resource-ids exist at all.
+Version choices were made for mutual compatibility rather than recency. java-client 11 was avoided because it
+changes the driver API (`AppiumDriver` is no longer a `RemoteWebDriver`). Cucumber 8 was avoided because it
+deprecates `cucumber-testng`, and TestNG integration is required. Selenium is pinned via `selenium-bom`
+because java-client declares it as an open range, which would otherwise let the resolved version drift between
+builds. `maven-enforcer-plugin` fails the build on divergent transitive versions.
 
-**Behaviour found that changed what is worth testing:**
+### Structure and boundaries
 
-| Finding | Effect on the suite |
-|---|---|
-| Login does **not** verify credentials — any non-empty username and password succeeds | No "wrong password" scenario. Asserting an error that the app never shows would be inventing behaviour |
-| A future date of birth (01/01/2099) is accepted | Not tested. Likely a product defect; a test for it would fail against current behaviour. Reported here instead |
-| Hotels show the **per-person** price (rounded down: 989.5 → £989); Holidays show the **total** price, with no label distinguishing them | Scenario 5 asserts what the UI shows today. The inconsistency is reported as a finding |
-| Tapping a card's price button does nothing visible | Not tested; there is no observable outcome to assert |
-| The date dialog has a text-input mode | Used by `LoginPage.selectDateOfBirth()`, instead of paging a calendar back 17 years |
-| Confirming `07/08/2009` makes the field display `2009-08-07` | Asserted, because it proves the picker's format conversion |
+```
+src/test/java/com/tui/automation/
+  config/           ConfigManager          settings: config.properties, overridable with -D
+  driver/           DriverManager          Appium session lifecycle, ThreadLocal driver
+  pages/            BasePage, LoginPage,   locators and UI interaction
+                    ListingsPage, ListingCard
+  hooks/            Hooks                  per-scenario start/teardown, failure screenshot
+  stepdefinitions/  LoginSteps,            Gherkin glue and assertions
+                    ListingsSteps
+  runners/          TestRunner             TestNG + Cucumber entry point
+  utilities/        TestDataReader + data records
+src/test/resources/  features/ · testdata/ · config/ · log4j2.xml
+```
 
-## 2. Dependency versions
+Everything sits under `src/test`; the project ships no production code.
 
-Versions were chosen for mutual compatibility, not by taking the newest of each.
+**Page Object Model.** Page classes own locators and interactions and return values. They contain no
+assertions. Step definitions own assertions and contain no locators. This boundary is what makes a UI change
+land in one file.
 
-| Decision | Reason | Trade-off |
-|---|---|---|
-| **java-client 10.1.1, not 11.0.0** | Version 11 was released days earlier and breaks the API: `AppiumDriver` is no longer a `RemoteWebDriver`, and PageFactory and the wait engine moved out | Not on the newest major version. Upgrading later is a deliberate, testable change |
-| **Selenium 4.44.0 pinned via `selenium-bom`** | java-client declares Selenium as a range `[4.42.0, 5.0)`. Unpinned, a build could silently change version the day Selenium publishes a release. 4.44 is the version java-client 10.1.1 fixed compatibility against | Manual bumps needed to move Selenium forward |
-| **Cucumber 7.34.9, not 8.x** | Cucumber 8 deprecates `cucumber-testng` for removal in favour of the JUnit Platform engine. The assignment requires TestNG integration | Not on the newest major version; a future move to the JUnit Platform engine is a known migration |
-| **`maven-enforcer-plugin` with `dependencyConvergence`** | Fails the build when two libraries pull different versions of the same transitive dependency — the usual cause of runtime `NoSuchMethodError` | A stricter build that can fail on an otherwise harmless upgrade. Worth it for reproducibility |
-| **Java 17 release target** | Cucumber 7's baseline, and the standard LTS on CI runners. Compiles on newer JDKs | — |
-| **Log4j2 with the SLF4J bridge** | java-client logs through SLF4J; the bridge routes those into the same configuration as framework logs, so one file holds both | One extra dependency |
+**`BasePage`** holds only what both pages genuinely share: the driver reference, one `WebDriverWait` built from
+configuration, the Compose test-tag locator, and visibility helpers. Page-specific behaviour — the date dialog,
+tab selection, card reading, list scrolling — stays in the page that owns it. The alternatives were a static
+helper, which would duplicate wait and driver setup per page, or inlining the Compose locator workaround at
+roughly 25 call sites. Selenium's `PageFactory` was rejected because it obscures when lookups occur, which
+conflicts with explicit waits and with Compose elements recreated on recomposition.
 
-## 3. Architecture
+**Driver lifecycle.** `Hooks` is the single owner: one session per scenario, created in `@Before` and quit in
+`@After` inside a `finally` block so teardown survives a failing screenshot. `DriverManager` holds the driver
+in a `ThreadLocal`, rejects a second start on the same thread, and clears the slot on quit. No `BaseTest`
+exists; a base class alongside hooks tends to duplicate setup.
 
-### Layering
-`runner → feature → step definition → page object → DriverManager → ConfigManager`, one direction only.
+**Configuration and test data.** Two layers only: `config.properties` for committed defaults, and `-Dkey=value`
+per run. Six keys: server URL, device UDID, APK path, app package, app activity, explicit-wait timeout.
+Required values fail with a message naming the key. The framework reads only these properties — it does not
+load `.env` or environment variables (`.env` is git-ignored as a precaution, not consumed).
 
-- **Pages** own locators and interactions. They contain no assertions and read no test data, so a locator
-  change touches exactly one file.
-- **Step definitions** own assertions. They contain no locators, so a wording change in a feature touches
-  only the step.
-- **`ListingCard` is a record** used for both "what the screen shows" and "what the JSON expects", so
-  `assertEquals(actual, expected)` compares five fields in one assertion with a readable diff.
+Test data is externalized to `testdata/login.json` and `listings.json`, deserialized into Java records with
+strict Jackson settings, so a missing or misspelled field fails immediately with the file and field named.
+Expected listing values were extracted from the APK's own bundled `assets/*.json`, so assertions compare the UI
+against the application's data source rather than hand-copied numbers. This couples the data file to this APK
+build; different content requires regeneration. The committed `user1` credentials are not a secret — the login
+accepts any non-empty value.
 
-### Decisions taken during the architecture review
-The first implementation was deliberately reduced after review. Each removal was based on actual usage, not taste.
+**Reuse.** Config, driver, hooks, runner, reporting and logging are app-agnostic. A different application
+would need new page objects, locators, feature files and test data, and a different platform would additionally
+need platform-specific capabilities and interactions.
 
-| Change | Reason | Trade-off |
-|---|---|---|
-| **`DriverFactory` merged into `DriverManager`** | Two classes for one responsibility; the factory was package-private with a single caller | A second platform would justify splitting it again. Doing so is mechanical |
-| **Environment-variable config layer removed** | Used nowhere except a validation run; CI can pass `-Dapp.path=$APP_PATH` just as easily | One override mechanism instead of two. Secrets would need another approach, but this project has none |
-| **`-Dplatform` and `<platform>.properties` removed** | Existed only for a hypothetical iOS; a single `config.properties` is enough today | Reinstating it is a rename plus a few lines. Documented in `CROSS_PLATFORM_DESIGN.md` |
-| **`getBoolean()` and `app.no.reset` removed; `noReset=false` hard-coded** | Clearing app data per scenario is a **test-isolation rule**, not an environment setting. Making it configurable would let someone break scenario independence | Changing it now means editing code, which is the point |
-| **`device.name` and `timeout.new.command.seconds` removed** | UiAutomator2 ignores `deviceName` on Android; the command timeout never needed to vary | Fewer knobs |
-| **`/status` probe for session diagnostics removed** | Duplicated what Selenium's exception cause already reports | A slightly less friendly message; the hint moved to the README |
-| **`get()` made required, `getOptional()` added** | Four of six keys are mandatory; a missing one should fail loudly with a message that says where to set it | — |
-| **No `BaseTest`** | Cucumber `Hooks` is the single owner of the driver lifecycle. A `BaseTest` alongside hooks is the classic source of duplicated setup | — |
+### Simplifications after review
 
-Result: the config and driver layers went from 274 to 196 lines with no loss of function.
+An architecture review was commissioned before adding features. Each of the following was removed after
+confirming it had no user: a separate `DriverFactory` (one caller, merged into `DriverManager`), an
+environment-variable configuration layer, a `-Dplatform` switch for a hypothetical iOS target, a configurable
+`app.no.reset` (clearing app data per scenario is a test-isolation rule, not an environment setting, so it is
+now fixed), two unused config keys, and an HTTP probe that duplicated information already in the Selenium
+exception. The config and driver layers went from 274 to 196 lines with no loss of capability.
 
-### `BasePage`: the one abstraction added, and why
-Every locator in this Compose app needs
-`AppiumBy.androidUIAutomator("new UiSelector().resourceId(\"tag\")")`, across roughly 25 locators in two pages,
-plus a shared explicit wait.
+## Locator Strategy and Application-Specific Decisions
 
-| Option | Verdict |
-|---|---|
-| **`BasePage` with the driver, the wait, `byTag()` and `waitForVisible()`** (chosen) | One place for the Compose workaround and the timeout. Inheritance is justified because both pages need exactly the same three things |
-| A static `Locators.byTag()` helper | No inheritance, but the wait setup and driver lookup would be duplicated per page |
-| Inline in every locator | Longest code; a typo in the UiSelector string would only surface at runtime, 25 times over |
-| Selenium `PageFactory` / `@FindBy` | Rejected: hides when lookups happen, and works poorly with re-rendered Compose elements |
-
-### Locator strategy
-`AppiumBy.id` **does not work** for this app. Compose test tags appear as resource-ids with no package prefix,
-and the `id` strategy expects `package:id/name`. This was proven by trying four strategies against a live
-session over raw HTTP:
+The app is built with Jetpack Compose with test tags exposed as resource-ids. Those ids carry no `package:id/`
+prefix, which Appium's `id` strategy expects — so `AppiumBy.id` silently fails on every element despite the id
+being visible in a UI dump. Four strategies were compared against a live session before choosing:
 
 | Strategy | Result |
 |---|---|
-| `id` = `login_screen_top_app_bar` | fails |
-| `id` = `com.tui.qa.challenge:id/login_screen_top_app_bar` | fails |
-| `-android uiautomator` → `UiSelector().resourceId(...)` | **works** (chosen) |
-| `xpath` → `//*[@resource-id=...]` | works, but slower |
+| `id`, bare tag and package-prefixed | Not found |
+| `-android uiautomator` → `UiSelector().resourceId(...)` | Found — adopted |
+| `xpath` on `@resource-id` | Found, slower |
 
-Accessibility ids are used where the app provides them (`Switch to text input mode`), and class names only for
-a child element inside an already-identified parent.
+The working strategy is centralized in `BasePage.byTag()`. Accessibility ids are used where the app supplies
+them; class names only to reach a child inside an already-identified parent. Locators were discovered from live
+`uiautomator` dumps on a connected device and validated by execution — a dump shows which attributes exist, but
+only a running session shows which strategy can match them.
 
-### Screen-visibility checks
-`isDisplayed()` originally returned `waitForVisible(root).isDisplayed()`, which can never return `false`: on
-timeout it throws, so the assertion messages in the steps were unreachable. `BasePage.isVisible()` now catches
-`TimeoutException` and returns `false`, so a failed login reports "Listings screen should be displayed after
-login" rather than a raw timeout on a resource-id. The waiting behaviour is unchanged.
+### Virtualized listings
 
-## 4. Scrolling a virtualised list
+The listings screen is a Compose `LazyColumn`: only the cards on screen exist in the hierarchy, so the page
+source never contains all 40 and the list must be scrolled and accumulated. Results are collected into a map
+keyed by the index embedded in each card's test tag, which de-duplicates across overlapping screens and
+preserves display order.
 
-`ListingsPage.allCardNames()` is the most involved code in the framework. Compose's `LazyColumn` only
-materialises the one or two cards on screen, so the page source never contains all 40. Every element of the
-design fixes a failure that was actually observed:
+Two decisions shaped the implementation:
 
-| Element | Why |
+- **A W3C touch drag rather than `mobile: scrollGesture`.** Appium log timings showed the gesture at roughly
+  2.7 s per call, and it consistently reported that it could not scroll further, which ended collection after
+  one screen. The drag includes a brief pause before release to prevent a fling that would skip cards.
+- **End-of-list detected by card index *and* screen position.** Index alone ended collection one card early,
+  because a tall card's name remains visible at a new position after a genuine scroll. A stale-element re-read
+  was also needed, since the lazy list can recompose between finding an element and reading it.
+
+Trade-off: collecting three tabs takes roughly 115 s. Shorter, faster drags were measured and rejected because
+they raise the risk of skipping a card, and the exact-list assertion was judged more valuable than the time.
+
+## AI Tool Usage and Corrections
+
+
+Engineering direction, review and scope control came from the engineer, who explored the application manually
+before the automation work began, applied prior Appium and test-automation experience to the design choices,
+and reviewed the generated code rather than accepting it as produced.
+
+| Area | Attribution |
 |---|---|
-| Collect into a `TreeMap` keyed by the index in the test tag (`content_card_hotel_name_<n>`) | De-duplicates across overlapping screens and preserves display order |
-| **A W3C touch drag instead of `mobile: scrollGesture`** | Measured from the Appium log: `scrollGesture` cost 2.7 s per call (275 s of a 404 s run). The drag is about 0.67 s. It also always reported "cannot scroll further", which ended collection after one screen |
-| A 150 ms pause before releasing the finger | Prevents a fling, which would skip cards |
-| A 60% drag rather than 80% | At 80%, one run collected 39 of 40 cards |
-| **End of list = the same cards at the same screen positions** | Comparing indices alone ended collection one card early: the log showed card 2 at `y=1632` still visible at `y=514` after a real scroll. Position is what distinguishes "nothing moved" from "a tall card is still in view" |
-| Re-read the screen on `StaleElementReferenceException`, up to 3 attempts | Observed in a real run: the lazy list recomposed between `findElements` and `getText` |
-| `MAX_SCROLLS = 60` | A runaway guard only; the stop condition is "nothing moved". Note that the All tab already uses 48 on a 2153 px screen, so a shorter screen may need a higher guard |
+| Implementation code, discovery scripting, log analysis, documentation drafting | AI-generated, engineer-reviewed |
+| Manual exploration of the app before automation; prior automation experience applied to design | Engineer |
+| Phased delivery with validation gates; commissioning the architecture review; requiring justification before any new helper or base class | Engineer's instruction |
+| `BasePage` responsibilities | Options and trade-offs presented by AI; **selection by the engineer** |
+| Removing the `DriverFactory` split, env-var layer, platform switch and configurable `noReset` | Proposed by AI in the commissioned review; **approved by the engineer** |
+| Scenario selection | Candidates proposed by AI from observed behaviour; **assessed and confirmed by the engineer** against release risk |
+| Deferring RetryAnalyzer and parallel execution; holding the CI workflow; keeping the repository local | Engineer's decisions |
+| Added assertion that the listings screen is displayed after login | Requested by the engineer during a focused review |
+| Clean-checkout verification run | Executed by the engineer; output then checked against the repository |
 
-**Why the scenario takes ~115 s:** collecting three lists costs about 101 s (48 + 23 + 24 scrolls), of which
-the drags are ~64 s and `findElements` ~19 s. Faster drags were measured and rejected for now because they
-raise the risk of skipping a card, and the exact-list assertion is worth more than the saved seconds.
+### Generated output that needed correction
 
-## 5. Configuration and test data
+| Issue | Correction |
+|---|---|
+| `AppiumBy.id(...)` compiled and looked correct but matched nothing at runtime | Compared strategies against a live session; centralized the working one in `BasePage.byTag()` |
+| `mobile: scrollGesture` was trusted for its "can scroll more" result, which is always false here | Replaced with a W3C drag; end-of-list derived from visible cards (`f06c069`) |
+| End-of-list compared card indices only, collecting 39 of 40 cards in one run | Compare index and screen position (`f06c069`) |
+| `isDisplayed()` returned `waitForVisible(...).isDisplayed()`, which throws on timeout and can never return false — making the steps' assertion messages unreachable | `BasePage.isVisible()` catches the timeout (`da79754`) |
+| The first implementation added `DriverFactory`, an env-var config layer and a platform switch with no present user | Removed (`cdad739`) |
+| A commit command chained with `;` committed despite a failing suite, so `24f08ca` records a verification that had not passed at that point | Switched to `&&`; the underlying flake was fixed in `f06c069` |
 
-- **Two layers only:** `config.properties` for committed, safe defaults, and `-Dkey=value` for per-run
-  overrides. Rejected alternative: surefire `<systemPropertyVariables>` in the pom, which is less code but
-  breaks IDE runs and mixes configuration into the build file.
-- **JSON into records, with Jackson failing fast.** `FAIL_ON_MISSING_CREATOR_PROPERTIES` and
-  `FAIL_ON_NULL_CREATOR_PROPERTIES` are enabled, and unknown fields fail by default, so a typo in a data file
-  produces "Missing creator property 'password' … testdata/login.json" rather than a `NullPointerException`
-  mid-scenario. Verified by deleting a field.
-- **`user1`/`user1` is committed** in `testdata/login.json`. This is not a secret: the app accepts any
-  non-empty value, so the string has no access value. Real credentials would be passed as `-D` properties or CI
-  secrets instead, and `.env` is git-ignored.
-- **Listing expectations are derived from the APK's bundled assets**, which keeps the assertions honest but
-  couples them to this app build. A new APK needs `testdata/listings.json` regenerated.
+Debugging was carried out within the session from log and session evidence, with the engineer reviewing the
+diagnosis and fix. Commit authorship is the engineer's on all commits with no co-author trailers, so the
+division above reflects the working session rather than git metadata.
 
-## 6. The five scenarios
+## Test Scenarios and Selection Rationale
 
-Chosen after exploring the app, to cover both screens, every interactive control and the main risks, with no
-overlap between scenarios.
+Discovery on a real device preceded selection, and four observations shaped it: the login screen does **not**
+verify credentials (any non-empty values reach the listings); a future date of birth is accepted; tapping a
+card's price produces no visible change; and Hotels display a per-person price rounded down while Holidays
+display a total, with no distinguishing label. The first two look like product defects and are reported rather
+than encoded as failing tests. The third has nothing observable to assert.
 
-| # | Scenario | Tags | What it protects against |
-|---|---|---|---|
-| 1 | Mandatory fields are validated | `@login @negative` | Validation silently disappearing. Checks all three field-level errors and that the app stays on the login screen |
-| 2 | Successful login opens the listings | `@login @smoke` | The main journey, plus the date picker's `dd/MM/yyyy` → ISO conversion, the listings screen, and the default tab |
-| 3 | Password visibility can be toggled | `@login` | Masking regressions. Asserts the masked state, the revealed plain text, the icon label, and masking again |
-| 4 | Category tabs show the matching listings | `@listings` | Filtering and navigation. Asserts the exact names in order per tab (40 / 20 / 20) and that exactly one tab is selected |
-| 5 | Hotel cards show the expected details | `@listings` | Data rendering. Asserts name, destination, rating, board type and price for the first three cards against the APK's data |
+| Scenario (feature file) | Value for release confidence |
+|---|---|
+| Mandatory fields are validated | Login is the only entry point. Asserts all three field-level errors and that the app stays put, so validation cannot silently disappear |
+| Successful login opens the listings | The main journey, plus the date picker's `dd/MM/yyyy` → ISO conversion — a real in-app transformation — and arrival on the listings screen with the default tab |
+| Password visibility can be toggled | Guards a visible-credential regression: masked, revealed with matching icon label, masked again |
+| Category tabs show the matching listings | Asserts exact card names in display order per tab (40 / 20 / 20) and that exactly one tab is selected, so wrong filtering cannot pass unnoticed |
+| Hotel cards show the expected details | Asserts name, destination, rating, board type and price for the first three cards against data extracted from the APK. Wrong prices are harder to spot than an outage |
 
-No scenario merely checks that an element exists. Each asserts behaviour or content.
+Together these exercise both screens and every interactive control, across validation, navigation, filtering
+and data rendering. No two overlap, and none merely asserts that an element is present.
 
-## 7. Reporting and debugging
+Rejected candidates: invalid-credentials error (the app has no credential check), future-DOB rejection (the app
+accepts it), price-button navigation (no observable outcome), image loading (depends on network state — images
+failed during development because of a device proxy), and a standalone "listings load" scenario (already
+covered above).
 
-- **One report, not two.** The Cucumber HTML plugin writes `target/cucumber-reports/cucumber.html`. A second
-  reporting library would duplicate the same information.
-- **Screenshots via `scenario.attach()`**, the standard Cucumber API, embedded in that report. No screenshot
-  utility class and no separate image folder to keep in sync. Verified by forcing a failure and extracting the
-  embedded PNG: it showed the exact failure state.
-- **The scenario name on every log line** via Log4j `ThreadContext` (`%X{scenario}`), so interleaved or
-  parallel output stays attributable.
-- **Evidence capture never breaks teardown:** the `@After` hook takes the screenshot inside a `try`, with
-  `DriverManager.quitDriver()` in the `finally`. `hasDriver()` prevents a screenshot attempt when session
-  creation failed.
-- Console at INFO for readability, file at DEBUG for investigation, third-party libraries at WARN.
+## CI and Cross-Platform Execution Design
 
-## 8. CI
+**Design and proposal only — not implemented.** There is no `.github/` directory in this repository; no
+workflow has been written, statically checked or executed. An Android workflow was designed in detail and then
+held. Nothing below has run.
 
-**Not implemented.** An Android GitHub Actions workflow was designed in Phase 10 and put on hold before any
-file was created, so there is no `.github/workflows/` directory. The design, the chosen runner strategy for
-Android and iOS, and the four open issues found while designing it (APK source, device locale, emulator
-timeouts, scroll limits on shorter screens) are recorded in `CROSS_PLATFORM_DESIGN.md`.
+**Separate jobs per platform.** Android on a Linux runner with an emulator; iOS on a macOS runner with a
+simulator, because iOS automation requires macOS and Xcode. The jobs are independent, so they can run
+concurrently when runner capacity allows, and neither needs the other's toolchain. Each job sets up JDK 17 with
+Maven caching, installs Appium and its platform driver, starts the server as a background step and waits for it
+to report ready, then runs `mvn clean test` with the platform and APK path passed as `-D` overrides. A Maven
+failure fails the job, so a genuine test failure fails the pipeline.
 
-The framework is already CI-ready in the sense that every environment-specific value is a `-D` override and all
-evidence lands under `target/`, which is straightforward to upload as artifacts.
+**Platform selection** would reintroduce the `-Dplatform` switch and per-platform property files removed
+earlier, with the driver options split into one builder per platform. The existing `@login`, `@listings`,
+`@smoke` and `@negative` tags remain available through `-Dcucumber.filter.tags`, and a platform tag could
+exclude a scenario that does not apply to one platform.
 
-## 9. Requirement status
+**Isolation for parallelism.** One device and one session per job. Parallelism *within* a job additionally
+requires a device pool so each thread claims its own device, a unique Appium server port per concurrent
+session, and confirmation that evidence stays separated. The current test data is read-only, so concurrent
+reads are safe; any scenario that mutated shared state would need per-thread data.
 
-| Requirement | Status | Evidence or note |
-|---|---|---|
-| Appium + Java + Maven | **Implemented and validated** | `mvn clean test` drives a real device |
-| Cucumber BDD with Gherkin | **Implemented and validated** | 2 feature files, 5 scenarios |
-| TestNG integration | **Implemented and validated** | `TestRunner extends AbstractTestNGCucumberTests`; surefire reports TestNG results |
-| UiAutomator2 driver for Android | **Implemented and validated** | Driver 7.0.0, Appium 3.2.2 |
-| Pinned, mutually compatible versions | **Implemented and validated** | BOM pins plus `dependencyConvergence` passing |
-| Page Object Model | **Implemented and validated** | `pages/` holds all locators; steps hold none |
-| JSON external test data | **Implemented and validated** | `testdata/*.json` into records; failure modes tested |
-| Cucumber HTML report | **Implemented and validated** | `target/cucumber-reports/cucumber.html`, contents parsed |
-| Logging | **Implemented and validated** | `target/logs/test-execution.log` with scenario context |
-| Failure screenshots | **Implemented and validated** | Verified with a deliberate failure; PNG extracted and viewed |
-| Exactly five meaningful scenarios | **Implemented and validated** | Section 6; all assert behaviour |
-| Validated locators | **Implemented and validated** | Captured from live dumps and exercised through real sessions |
-| Tag-based execution | **Implemented and validated** | `-Dcucumber.filter.tags="@smoke"` ran 1 of 5 |
-| `mvn clean test` from the terminal | **Implemented and validated** | 5/5 green from a **clean `git clone`** of commit `da79754`, 2026-10-21; report and log in `evidence/` |
-| ThreadLocal driver management | **Implemented, not validated** | The code is in `DriverManager`, but it has never been exercised with more than one thread |
-| Reliable driver lifecycle and teardown | **Implemented and validated** | Teardown observed to run on failing scenarios; `finally` clears the thread slot |
-| Configurable device settings | **Implemented and validated** | `-Ddevice.udid`, `-Dapp.path`, `-Dappium.server.url`, timeouts all exercised |
-| No dead code or duplicate scenarios | **Implemented and validated** | Every method is referenced; step methods are invoked by Cucumber annotations |
-| Git repository hygiene | **Implemented and validated** | `target/`, IDE metadata, `*.apk` and `.env` ignored; no secrets tracked |
-| README and DECISIONS | **Implemented** | This file, `README.md`, `CROSS_PLATFORM_DESIGN.md` |
-| **Retry handling** | **Deferred, not implemented** | Descoped by the user. No retry analyzer or listener exists |
-| **Parallel execution** | **Deferred, not implemented** | Descoped by the user. ThreadLocal is a precondition only; see the blockers in `CROSS_PLATFORM_DESIGN.md` |
-| **GitHub Actions CI** | **Deferred, not implemented** | Designed, then put on hold. No workflow file exists |
-| **iOS support** | **Design only** | `CROSS_PLATFORM_DESIGN.md` |
-| **Cloud execution** | **Design only** | Same document, including a credential-logging defect to fix first |
-| Emulator execution | **Not validated** | An emulator was booted during development; the suite was never completed on it |
+**Evidence** would be uploaded per platform even when a job fails: the Cucumber HTML report with embedded
+failure screenshots, the execution log, TestNG output, and the Appium server log written outside `target/` so
+the build's clean step cannot remove it.
 
-## 10. AI assistance and corrections
+**Open issues found while designing it.** No approved APK source exists — the binary is not committed, and
+GitHub secrets cap well below its size, so a private release asset was proposed. Device locale affects the date
+dialog's input mask (`DD/MM/YYYY` was observed on an `en_IN` device), so a differently configured emulator may
+break the login scenarios; this is an untested hypothesis. Cold emulators need a longer explicit wait, and a
+shorter emulator screen needs more scrolls than the physical device used here.
 
-This framework was built with Claude Code. The generated output needed correction in several places, which is
-worth recording because the failures are instructive:
+## Validation and Requirement Status
 
-| Generated | Problem | Correction |
-|---|---|---|
-| `AppiumBy.id("login_screen_top_app_bar")` | Looked correct and failed at runtime; Compose tags carry no package prefix | Proved the working strategy against a live session, then centralised it in `BasePage.byTag()` |
-| `mobile: scrollGesture` with its "can scroll more" return value | Scrolled, but always returned `false`, so collection stopped after one screen | Replaced with a W3C drag; end of list detected from the visible cards |
-| `scrollGesture` with a serialised `WebElement` as `elementId` | Appium expects the raw element id string | Pass `((RemoteWebElement) el).getId()` |
-| End-of-list detection by card index | Missed one card when a tall card stayed in view | Compare index **and** y position |
-| `isDisplayed()` returning `waitForVisible(...).isDisplayed()` | Could never return `false`, making the steps' assertion messages unreachable | `BasePage.isVisible()` catches the timeout |
-| `DriverFactory` + `DriverManager` + an env-var config layer + a platform switch | Enterprise-shaped abstractions with no present need | Removed during the architecture review (section 3) |
-| A commit command chained with `;` after a test run | Committed despite a failing suite, so commit `24f08ca` claims a verification that had not passed at that point | Switched to `&&` so commits only follow green runs. The flake was fixed in `f06c069` |
+**What was actually run.** `mvn clean test` from a clean `git clone` of commit `da79754` on 2026-10-21 against
+a physical OnePlus Nord CE (Android 13) with Appium 3.2.2 and UiAutomator2 7.0.0: **5 scenarios, 0 failures,
+0 errors, 176.6 s, BUILD SUCCESS.** The report and log from that run are committed in `evidence/`; the report
+records 42 passing steps and no failures. Screenshot-on-failure was exercised separately by temporarily
+changing an expected value and confirming the attached image showed the failing screen; the all-green evidence
+run correctly contains no attachments.
 
-An unexplained environmental failure also remains on record: one run in four hit
-`InvalidElementStateException` with `Input event injection failed` in logcat — Android refusing a synthetic
-touch. It was not reproduced and is documented in the README rather than hidden behind a retry.
+| Requirement | Status |
+|---|---|
+| Appium + Java + Maven + Cucumber BDD + TestNG | Implemented, verified by the run above |
+| Page Object Model with locators confined to page classes | Implemented, verified |
+| Externalized JSON test data with strict parsing | Implemented; failure mode observed |
+| Cucumber HTML report | Implemented, verified (`evidence/cucumber.html`) |
+| Terminal execution from a clean checkout | Implemented, verified |
+| Five scenarios | Implemented, verified against the feature files |
+| Tag-based execution (`@login`, `@listings`, `@smoke`, `@negative`) | Implemented, verified |
+| Validated locators | Implemented; taken from live dumps and exercised by passing scenarios |
+| Logging with per-scenario context; failure screenshots | Implemented, verified |
+| Driver lifecycle and teardown on failure | Implemented, verified |
+| Configurable device, APK and server settings | Implemented, verified |
+| `.gitignore` hygiene; no secrets or APK committed | Implemented, verified |
+| **ThreadLocal driver management** | **Implemented, not verified** — present in `DriverManager`, but only ever run single-threaded, so it has not been proven by a parallel run |
+| **RetryAnalyzer** | **Not implemented.** No retry analyzer or listener wiring exists in the repository. Deliberately deferred |
+| **Parallel execution** | **Not implemented and not validated.** No parallel data provider or thread configuration. Blockers listed in the CI section |
+| **CI workflow** | **Not implemented.** Design only; never executed |
+| **iOS support** | **Design only.** No iOS build, macOS setup or XCUITest configuration |
+| **Cloud device execution** | **Investigated, not executed.** No account used and no session created. The investigation identified the requirements and one prerequisite defect: `DriverManager` logs the full capability map, which would write a cloud access key into logs and artifacts, so that line must be redacted first |
+| Emulator execution | **Not validated.** An emulator was started during development, but the suite was never completed on one. All verification used a single physical device |
+
+**Other limitations.** Verification covers one device, one Android version and one locale. The expected listing
+data is tied to this APK build. One environmental failure was observed and not reproduced
+(`InvalidElementStateException`, with input injection refused in the device log) — it is documented in
+`README.md` rather than hidden behind a retry. Statements marked "verified" rest on command output and
+artifacts observed during the working session; apart from the clean-checkout run, they were not independently
+re-executed.
