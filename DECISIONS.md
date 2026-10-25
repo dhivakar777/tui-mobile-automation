@@ -48,6 +48,23 @@ conflicts with explicit waits and with Compose elements recreated on recompositi
 in a `ThreadLocal`, rejects a second start on the same thread, and clears the slot on quit. No `BaseTest`
 exists; a base class alongside hooks tends to duplicate setup.
 
+**Failure evidence.** On failure, the `@After` hook captures one screenshot while the session is still open,
+embeds it in the Cucumber report and writes it to `target/screenshots/<timestamp>_<scenario-name>.png`, logging
+the path. Capture errors are logged as warnings only, so they cannot skip teardown or replace the scenario's
+original failure; this was verified by killing the session inside a temporary failing scenario.
+
+**Retry.** `RetryAnalyzer` (TestNG `IRetryAnalyzer`) is attached to Cucumber's `runScenario` test method by
+`RetryTransformer`, an `IAnnotationTransformer` registered as a TestNG listener in the Surefire configuration —
+annotation transformers cannot be added with `@Listeners`. It retries only environmental failures (session not
+created or lost, device input refused, stale element) and never assertion failures, timeouts or missing
+elements, because those can be genuine defects. `retry.max.retries` defaults to 1; 0 disables it. The build
+result reflects the final attempt. A retried attempt stays visible: it is a skipped test in the Surefire results,
+a `WARN` log line naming the exception, and a FAILED entry in the Cucumber report — which, not knowing about the
+TestNG retry, lists the passing attempt as a separate entry and still counts the earlier failure in its summary.
+
+**Safe capability logging.** Session start logs an explicit allowlist of capabilities rather than the full map,
+so credentials added later (for example a cloud access key) are never written to logs or reports.
+
 **Configuration and test data.** Two layers only: `config.properties` for committed defaults, and `-Dkey=value`
 per run. Six keys: server URL, device UDID, APK path, app package, app activity, explicit-wait timeout.
 Required values fail with a message naming the key. The framework reads only these properties — it does not
@@ -109,6 +126,19 @@ Two decisions shaped the implementation:
 Trade-off: collecting three tabs takes roughly 115 s. Shorter, faster drags were measured and rejected because
 they raise the risk of skipping a card, and the exact-list assertion was judged more valuable than the time.
 
+### Device locale
+
+The app formats both dates and prices from the device locale. On an en-US emulator the date dialog's input mask
+becomes `MM/DD/YYYY`, so typing 7 August yields `2009-07-08`, and prices render as `$1,280` instead of
+`£1,280`. Two scenarios failed for exactly this reason on a reviewer's emulator; earlier verification had only
+used a phone that was already set to en-GB.
+
+The test data describes UK listings with GBP prices, so the session now pins the device to **en-GB** through
+Appium's standard `language` and `locale` capabilities (`device.language`, `device.locale`). Assertions were not
+changed. Appium leaves the device in that locale after the run; blanking both keys keeps the device's own locale.
+The `$` rendering for GBP prices on a US device looks like an application defect — the currency should follow
+the data, not the device — and is reported rather than encoded in a test.
+
 ## AI Tool Usage and Corrections
 
 
@@ -124,7 +154,9 @@ and reviewed the generated code rather than accepting it as produced.
 | `BasePage` responsibilities | Options and trade-offs presented by AI; **selection by the engineer** |
 | Removing the `DriverFactory` split, env-var layer, platform switch and configurable `noReset` | Proposed by AI in the commissioned review; **approved by the engineer** |
 | Scenario selection | Candidates proposed by AI from observed behaviour; **assessed and confirmed by the engineer** against release risk |
-| Deferring RetryAnalyzer and parallel execution; holding the CI workflow; keeping the repository local | Engineer's decisions |
+| Deferring parallel execution, cloud and iOS; keeping the repository local until the engineer chose to publish it | Engineer's decisions |
+| RetryAnalyzer and the CI workflow | Initially deferred by the engineer; later implemented by AI in response to external review feedback that the engineer supplied, with the engineer setting the priorities and acceptance criteria |
+| Fixes after external review: locale pin, retry, failure screenshots on disk, build workflow, capability-logging allowlist | Implemented and verified by AI against the engineer's brief; the engineer reviewed the validation report and requested a further review of retry reporting |
 | Added assertion that the listings screen is displayed after login | Requested by the engineer during a focused review |
 | Clean-checkout verification run | Executed by the engineer; output then checked against the repository |
 
@@ -133,11 +165,14 @@ and reviewed the generated code rather than accepting it as produced.
 | Issue | Correction |
 |---|---|
 | `AppiumBy.id(...)` compiled and looked correct but matched nothing at runtime | Compared strategies against a live session; centralized the working one in `BasePage.byTag()` |
-| `mobile: scrollGesture` was trusted for its "can scroll more" result, which is always false here | Replaced with a W3C drag; end-of-list derived from visible cards (`f06c069`) |
-| End-of-list compared card indices only, collecting 39 of 40 cards in one run | Compare index and screen position (`f06c069`) |
-| `isDisplayed()` returned `waitForVisible(...).isDisplayed()`, which throws on timeout and can never return false — making the steps' assertion messages unreachable | `BasePage.isVisible()` catches the timeout (`da79754`) |
-| The first implementation added `DriverFactory`, an env-var config layer and a platform switch with no present user | Removed (`cdad739`) |
-| A commit command chained with `;` committed despite a failing suite, so `24f08ca` records a verification that had not passed at that point | Switched to `&&`; the underlying flake was fixed in `f06c069` |
+| `mobile: scrollGesture` was trusted for its "can scroll more" result, which is always false here | Replaced with a W3C drag; end-of-list derived from visible cards (`9f1244e`) |
+| End-of-list compared card indices only, collecting 39 of 40 cards in one run | Compare index and screen position (`9f1244e`) |
+| `isDisplayed()` returned `waitForVisible(...).isDisplayed()`, which throws on timeout and can never return false — making the steps' assertion messages unreachable | `BasePage.isVisible()` catches the timeout (`d6b7997`) |
+| The first implementation added `DriverFactory`, an env-var config layer and a platform switch with no present user | Removed (`6beac0f`) |
+| All runs used one phone that was already set to en-GB, so locale-dependent date and price formatting went unnoticed; an external reviewer's en-US emulator failed 2 of 5 scenarios | Session pinned to en-GB; verified by reproducing both failures, then passing from an en-US starting state |
+| Documentation attributed the observed date format to an "en_IN device"; en_IN was the Mac's locale as reported by Maven, not the phone's | Corrected to en-GB |
+| Session start logged the full capability map, which would expose credentials such as a cloud access key | Replaced with an explicit allowlist of safe capabilities |
+| A commit command chained with `;` committed despite a failing suite, so `0c766a7` records a verification that had not passed at that point | Switched to `&&`; the underlying flake was fixed in `9f1244e` |
 
 Debugging was carried out within the session from log and session evidence, with the engineer reviewing the
 diagnosis and fix. Commit authorship is the engineer's on all commits with no co-author trailers, so the
@@ -169,9 +204,13 @@ covered above).
 
 ## CI and Cross-Platform Execution Design
 
-**Design and proposal only — not implemented.** There is no `.github/` directory in this repository; no
-workflow has been written, statically checked or executed. An Android workflow was designed in detail and then
-held. Nothing below has run.
+**Implemented: build validation only.** `.github/workflows/build.yml` runs on push and pull request to `main`:
+JDK 17 with Maven caching, `mvn test-compile` (which also runs the enforcer rules), and a Cucumber dry run that
+fails the build if any feature step lacks a definition. Reports are uploaded even when a step fails. It launches
+no emulator and runs no UI test. The workflow passes `actionlint`, and both Maven commands were run verbatim
+locally from a clean `target/`; it has **not yet run on GitHub Actions**.
+
+**Design only — everything below.** Emulator execution in CI and iOS are not implemented.
 
 **Separate jobs per platform.** Android on a Linux runner with an emulator; iOS on a macOS runner with a
 simulator, because iOS automation requires macOS and Xcode. The jobs are independent, so they can run
@@ -194,46 +233,50 @@ reads are safe; any scenario that mutated shared state would need per-thread dat
 failure screenshots, the execution log, TestNG output, and the Appium server log written outside `target/` so
 the build's clean step cannot remove it.
 
-**Open issues found while designing it.** No approved APK source exists — the binary is not committed, and
-GitHub secrets cap well below its size, so a private release asset was proposed. Device locale affects the date
-dialog's input mask (`DD/MM/YYYY` was observed on an `en_IN` device), so a differently configured emulator may
-break the login scenarios; this is an untested hypothesis. Cold emulators need a longer explicit wait, and a
-shorter emulator screen needs more scrolls than the physical device used here.
+**Next step towards emulator execution.** Add an Ubuntu job that enables KVM, boots an emulator, installs
+Appium 3.2.2 with UiAutomator2 7.0.0, starts the server and runs `mvn clean test -Dapp.path=<apk>`. The APK is
+available in the repository as `TUIChallengeApp.zip`. The locale risk identified during design is now handled by
+the en-GB pin; a cold emulator may still need `-Dtimeout.explicit.wait.seconds=30`.
 
 ## Validation and Requirement Status
 
-**What was actually run.** `mvn clean test` from a clean `git clone` of commit `da79754` on 2026-10-21 against
-a physical OnePlus Nord CE (Android 13) with Appium 3.2.2 and UiAutomator2 7.0.0: **5 scenarios, 0 failures,
-0 errors, 176.6 s, BUILD SUCCESS.** The report and log from that run are committed in `evidence/`; the report
-records 42 passing steps and no failures. Screenshot-on-failure was exercised separately by temporarily
-changing an expected value and confirming the attached image showed the failing screen; the all-green evidence
-run correctly contains no attachments.
+**What was actually run (2026-10-25)**, Appium 3.2.2 + UiAutomator2 7.0.0:
+
+| Run | Device | Result | Evidence |
+|---|---|---|---|
+| Reproduction of the reviewed failures, locale pin disabled (`-Ddevice.language= -Ddevice.locale=`) | Android emulator, API 35, en-US | 5 run, **2 failures** (`2009-07-08`, `$1,280`) | `evidence/failure-reproduction/` — report, log, 2 screenshots |
+| Default `mvn clean test`, emulator reset to en-US first | Same emulator | **5 run, 0 failures, 135.8 s**, no retries | `evidence/passing-run/` |
+| Repeated default runs | Same emulator | Steady state (already en-GB): 5/5, no retries. Locale transitions from en-US: 4 of 6 passed; both failures came immediately after the emulator had stopped responding and was rebooted, when the first session reported `Cannot set the device locale` | Console output and logs |
+| Default `mvn clean test` | OnePlus Nord CE (EB2101), Android 13, en-GB | 5 run, 0 failures, 149.7 s | Console output only |
+| Temporary retry check (removed afterwards) | Emulator | Environmental failure retried once and passed; assertion failure ran once and failed; `retry.max.retries=0` disabled retry | Not committed |
+| Temporary screenshot-resilience check (removed afterwards) | Phone | Screenshot saved; with the session killed, capture failed with a warning, teardown ran and the original failure was reported | Not committed |
+| CI workflow commands, run locally | — | Both steps pass from a clean `target/` | Not run on GitHub Actions |
 
 | Requirement | Status |
 |---|---|
-| Appium + Java + Maven + Cucumber BDD + TestNG | Implemented, verified by the run above |
+| Appium + Java + Maven + Cucumber BDD + TestNG | Implemented, verified |
 | Page Object Model with locators confined to page classes | Implemented, verified |
 | Externalized JSON test data with strict parsing | Implemented; failure mode observed |
-| Cucumber HTML report | Implemented, verified (`evidence/cucumber.html`) |
-| Terminal execution from a clean checkout | Implemented, verified |
-| Five scenarios | Implemented, verified against the feature files |
+| Cucumber HTML report | Implemented, verified |
+| Five scenarios passing on emulator and phone | Implemented, verified |
 | Tag-based execution (`@login`, `@listings`, `@smoke`, `@negative`) | Implemented, verified |
-| Validated locators | Implemented; taken from live dumps and exercised by passing scenarios |
-| Logging with per-scenario context; failure screenshots | Implemented, verified |
+| Validated locators | Implemented; exercised by passing scenarios on two devices |
+| Logging with per-scenario context | Implemented, verified |
+| Failure screenshots on disk and in the report | Implemented, verified with genuine failures |
 | Driver lifecycle and teardown on failure | Implemented, verified |
-| Configurable device, APK and server settings | Implemented, verified |
-| `.gitignore` hygiene; no secrets or APK committed | Implemented, verified |
-| **ThreadLocal driver management** | **Implemented, not verified** — present in `DriverManager`, but only ever run single-threaded, so it has not been proven by a parallel run |
-| **RetryAnalyzer** | **Not implemented.** No retry analyzer or listener wiring exists in the repository. Deliberately deferred |
-| **Parallel execution** | **Not implemented and not validated.** No parallel data provider or thread configuration. Blockers listed in the CI section |
-| **CI workflow** | **Not implemented.** Design only; never executed |
-| **iOS support** | **Design only.** No iOS build, macOS setup or XCUITest configuration |
-| **Cloud device execution** | **Investigated, not executed.** No account used and no session created. The investigation identified the requirements and one prerequisite defect: `DriverManager` logs the full capability map, which would write a cloud access key into logs and artifacts, so that line must be redacted first |
-| Emulator execution | **Not validated.** An emulator was started during development, but the suite was never completed on one. All verification used a single physical device |
+| Configurable device, APK, server, locale and retry settings | Implemented, verified |
+| **RetryAnalyzer** | **Implemented, verified** with a controlled temporary scenario; not yet observed absorbing a real flake in the five scenarios |
+| Safe capability logging | Implemented, verified in the session log |
+| **CI workflow** | **Implemented (build validation only), not yet run on GitHub Actions.** No UI tests in CI |
+| `.gitignore` hygiene; no secrets committed | Implemented. History pattern-scanned for credentials; not a full audit |
+| **ThreadLocal driver management** | **Implemented, not verified** — only ever run single-threaded |
+| **Parallel execution** | **Not implemented.** Needs a device pool, unique Appium ports per session and a parallel runner |
+| **Emulator execution in CI** | **Not implemented** — next step described above |
+| **iOS support** | **Design only** |
+| **Cloud device execution** | **Investigated, not executed.** No account used. The capability-logging prerequisite it identified is now fixed |
 
-**Other limitations.** Verification covers one device, one Android version and one locale. The expected listing
-data is tied to this APK build. One environmental failure was observed and not reproduced
-(`InvalidElementStateException`, with input injection refused in the device log) — it is documented in
-`README.md` rather than hidden behind a retry. Statements marked "verified" rest on command output and
-artifacts observed during the working session; apart from the clean-checkout run, they were not independently
-re-executed.
+**Other limitations.** Verification covers one emulator and one phone, both forced to en-GB. The expected
+listing data is tied to this APK build. Retry absorbs only the listed environmental exceptions; anything else
+fails the build on the first attempt. The first session after a locale change is the fragile point: on a
+freshly rebooted emulator it failed twice with `Cannot set the device locale`, and one retry was not enough to
+absorb it; re-running the suite, with the locale then already set, passed.

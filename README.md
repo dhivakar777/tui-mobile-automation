@@ -34,7 +34,7 @@ Cucumber BDD and Maven. Five scenarios cover the login screen and the travel lis
    ```bash
    adb devices -l                         # the state must be "device"
    ```
-7. **The application APK**, available locally. It is not stored in this repository.
+7. **The application APK.** The repository contains it as `TUIChallengeApp.zip`; unzip it, or use your own copy.
 
 ## Project structure
 
@@ -43,7 +43,8 @@ pom.xml                      Build, pinned dependency versions, enforcer rules
 README.md                    This file
 DECISIONS.md                 Design decisions and requirement status
 CROSS_PLATFORM_DESIGN.md     iOS, cloud and parallel execution design (not implemented)
-evidence/                    Report and log from the documented validation run
+evidence/                    Reports, logs and screenshots from documented runs
+.github/workflows/build.yml  CI: compile and Gherkin validation (no UI tests)
 src/test/java/com/tui/automation/
   config/ConfigManager       Reads config.properties; any key can be overridden with -Dkey=value
   driver/DriverManager       Creates, exposes and ends the Appium session (one driver per thread)
@@ -54,6 +55,7 @@ src/test/java/com/tui/automation/
   hooks/Hooks                Starts and ends the driver per scenario; failure screenshots
   stepdefinitions/           Gherkin steps translated into page-object calls and assertions
   runners/TestRunner         TestNG-based Cucumber runner
+  retry/                     Retry analyzer for environmental failures, and its TestNG wiring
   utilities/TestDataReader   Loads JSON test data into records
 src/test/resources/
   features/login.feature     3 scenarios
@@ -78,6 +80,8 @@ Defaults live in `src/test/resources/config/config.properties`. Override any key
 | `app.path` | *(blank)* | Blank launches the installed app; set it to an APK path to install that file first |
 | `app.package` | `com.tui.qa.challenge` | Application package |
 | `app.activity` | `com.tui.qa.challenge.MainActivity` | Launch activity |
+| `device.language`, `device.locale` | `en`, `GB` | Device locale for the session. The app formats dates and prices from it, and the test data expects en-GB. Appium leaves the device in this locale afterwards; blank both to keep the device's own |
+| `retry.max.retries` | `1` | Extra attempts for a scenario that fails with an environmental error; `0` disables retry |
 | `timeout.explicit.wait.seconds` | `15` | Explicit wait for elements; raise it on slow emulators |
 
 ### Supplying the APK
@@ -95,9 +99,12 @@ or let Appium install it at the start of every session:
 mvn clean test -Dapp.path=/path/to/TUIChallengeApp.apk
 ```
 
-`*.apk` and `apps/` are git-ignored, so the binary is never committed.
+`*.apk` and `apps/` are git-ignored, so an extracted APK is never committed by accident. The repository does contain `TUIChallengeApp.zip`, which was uploaded separately.
 
 ## Running the tests
+
+The five UI scenarios run **locally only**: they need a connected Android device or emulator and a running
+Appium server. CI does not run them; see [Continuous integration](#continuous-integration).
 
 **1. Start the Appium server** in its own terminal:
 
@@ -134,20 +141,52 @@ mvn clean test -Dcucumber.filter.tags="@login or @listings"
 | Evidence | Location |
 |---|---|
 | Cucumber HTML report | `target/cucumber-reports/cucumber.html` |
-| Failure screenshots | **Embedded inside that HTML report**, attached to the failing scenario |
+| Failure screenshots | `target/screenshots/<timestamp>_<scenario-name>.png`, also embedded in the HTML report. The path is logged |
 | Execution log | `target/logs/test-execution.log` (DEBUG, with the scenario name on every line) |
 | Console log | INFO level, in the terminal |
 | TestNG/Surefire output | `target/surefire-reports/` |
 | Appium server log | Wherever the server was started, e.g. `appium --log /tmp/appium.log` |
-| Snapshot of a known-good run | `evidence/` — report and log from a clean-checkout run; see `evidence/README.md` |
+| Committed evidence | `evidence/passing-run/` and `evidence/failure-reproduction/` (with screenshots); see `evidence/README.md` |
 
 Open the report with `open target/cucumber-reports/cucumber.html`. `mvn clean` deletes `target/`, so copy
 anything you need to keep.
 
+## Retry
+
+A scenario that fails with an environmental error — session not created or lost, device input refused, or a
+stale element — is retried up to `retry.max.retries` times (default 1). Assertion failures, timeouts and missing
+elements are **never** retried, because they can be genuine defects.
+
+How a retried scenario is reported (observed with controlled temporary scenarios):
+
+| Outcome | Maven / Surefire | Cucumber HTML report |
+|---|---|---|
+| Fails once, passes on retry | `BUILD SUCCESS`; the failed attempt counts as **Skipped** (e.g. `Tests run: 2, Failures: 0, Skipped: 1`) | **Two entries:** one FAILED, one PASSED. The report does not mark the second as a retry, so its summary still counts a failure |
+| Fails on every attempt | `BUILD FAILURE`; earlier attempts Skipped, last attempt a Failure | One FAILED entry per attempt |
+| Assertion failure | `BUILD FAILURE` on the first attempt; never retried | One FAILED entry |
+
+So the build result reflects the final attempt, and no failed attempt is hidden: it stays in the HTML report, as
+a skipped test in `target/surefire-reports/`, and as a `WARN` line from `RetryAnalyzer` in
+`target/logs/test-execution.log` naming the scenario and the exception. When the HTML report shows a failure but
+the build passed, check that log for a retry.
+
+```bash
+mvn clean test -Dretry.max.retries=0      # disable retry
+```
+
 ## Continuous integration
 
-**Not implemented.** This repository contains no workflow. The proposed design, including the Android and iOS
-job strategy, is in `CROSS_PLATFORM_DESIGN.md`.
+`.github/workflows/build.yml` runs on push and pull request to `main`, and manually from the Actions tab:
+
+1. JDK 17 with Maven caching.
+2. `mvn -B -ntp test-compile` — compiles everything and runs the enforcer rules.
+3. `mvn -B -ntp test -Dcucumber.execution.dry-run=true` — fails if any feature step has no step definition.
+4. Uploads `target/cucumber-reports/`, `target/surefire-reports/` and `target/logs/` as the
+   `build-validation-reports` artifact, even when a step fails.
+
+**It does not run the UI tests.** It starts no emulator or Appium server and installs no app. The workflow passes
+`actionlint` and its commands were run locally, but it has **not yet run on GitHub Actions**. The next step is an
+emulator job, described in `DECISIONS.md`.
 
 ## Troubleshooting
 
@@ -169,6 +208,13 @@ Set it in `config/config.properties` or pass `-D<key>=...`.
 **`Invalid test data in testdata/<file>.json: Missing creator property '<field>'`**
 A JSON file is missing a field that the matching record requires. The message names the file and the field.
 
+**Dates or prices differ from the expected values (`2009-07-08`, `$1,280`)**
+The device locale is not en-GB. Check that `device.language` and `device.locale` are not blanked.
+
+**`Cannot set the device locale to 'en_GB'`** (session creation fails)
+Seen on the first session after a locale change on a freshly rebooted emulator. Run the suite again; the locale
+is normally applied by then, and later sessions skip the change.
+
 **Build fails on the enforcer rules**
 `requireJavaVersion [17,)` or `requireMavenVersion [3.9,)` failed. Check `mvn -v`, which reports the JDK Maven
 itself uses; that can differ from your shell's `java -version`.
@@ -176,11 +222,11 @@ itself uses; that can differ from your shell's `java -version`.
 ## Current limitations
 
 - **Android only.** iOS, device clouds and cross-platform execution are design-only; see `CROSS_PLATFORM_DESIGN.md`.
-- **No CI pipeline.** No workflow is included in this repository.
-- **Retry and parallel execution are not implemented.** `DriverManager` keeps one driver per thread, which is a
-  precondition for parallel execution, but parallel execution has never been enabled or verified. Single
-  device, single thread today.
-- **Validated on one device only:** a OnePlus Nord CE (EB2101, Android 13). Not yet run on an emulator end to end.
+- **CI validates the build only.** No UI tests run in CI, and the workflow has not yet run on GitHub Actions.
+- **Parallel execution is not implemented.** `DriverManager` keeps one driver per thread, which is a
+  precondition, but parallel execution has never been enabled or verified. Single device, single thread today.
+- **Validated on two devices:** an Android emulator (API 35) and a OnePlus Nord CE (EB2101, Android 13), both
+  in en-GB.
 - **Scenarios depend on the app's bundled data.** `testdata/listings.json` was extracted from the APK's
   `assets/*.json`. A new APK build with different data needs that file regenerated.
 - The login screen does not verify credentials, so no scenario asserts a failed login. See `DECISIONS.md`.

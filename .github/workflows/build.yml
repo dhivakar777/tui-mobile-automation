@@ -1,0 +1,50 @@
+# Build and static validation only. This workflow does NOT launch an emulator, install the app or run the
+# Appium UI tests: those need an Android device, the Appium server and the APK, none of which this job sets up.
+# See README.md "Continuous integration" for scope and the next step towards emulator execution.
+name: Build and validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # Runs the enforcer rules (Java 17+, Maven 3.9+, dependency convergence) and compiles all test sources.
+      - name: Compile and enforce build rules
+        run: mvn -B -ntp test-compile
+
+      # Cucumber dry run: parses every feature file and checks each step has exactly one matching step
+      # definition, without executing steps or hooks, so no device or Appium server is contacted.
+      - name: Validate Gherkin steps (Cucumber dry run)
+        run: mvn -B -ntp test -Dcucumber.execution.dry-run=true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-validation-reports
+          path: |
+            target/cucumber-reports/
+            target/surefire-reports/
+            target/logs/
+          if-no-files-found: warn
+          retention-days: 14

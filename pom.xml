@@ -137,6 +137,15 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${maven-surefire-plugin.version}</version>
+                <configuration>
+                    <properties>
+                        <!-- Attaches the retry analyzer to Cucumber scenarios; see retry/RetryTransformer. -->
+                        <property>
+                            <name>listener</name>
+                            <value>com.tui.automation.retry.RetryTransformer</value>
+                        </property>
+                    </properties>
+                </configuration>
             </plugin>
         </plugins>
     </build>

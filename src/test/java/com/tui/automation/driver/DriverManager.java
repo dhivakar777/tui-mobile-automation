@@ -6,6 +6,7 @@ import io.appium.java_client.android.AndroidDriver;
 import io.appium.java_client.android.options.UiAutomator2Options;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.openqa.selenium.Capabilities;
 import org.openqa.selenium.WebDriverException;
 
 import java.net.MalformedURLException;
@@ -14,6 +15,9 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Creates, exposes and ends the Appium session. The driver is held per thread,
@@ -24,6 +28,9 @@ public final class DriverManager {
     private static final Logger LOG = LogManager.getLogger(DriverManager.class);
     private static final ThreadLocal<AppiumDriver> DRIVER = new ThreadLocal<>();
     private static final Duration NEW_COMMAND_TIMEOUT = Duration.ofSeconds(120);
+    private static final List<String> LOGGABLE_CAPABILITIES = List.of(
+            "platformName", "appium:automationName", "appium:udid", "appium:app", "appium:appPackage",
+            "appium:appActivity", "appium:language", "appium:locale", "appium:noReset");
 
     private DriverManager() {
     }
@@ -34,7 +41,7 @@ public final class DriverManager {
         }
         URL serverUrl = serverUrl();
         UiAutomator2Options options = androidOptions();
-        LOG.info("Creating Android session on {} with capabilities {}", serverUrl, options.asMap());
+        LOG.info("Creating Android session on {} with capabilities {}", serverUrl, loggableCapabilities(options));
         try {
             AndroidDriver driver = new AndroidDriver(serverUrl, options);
             LOG.info("Session {} started on device {}", driver.getSessionId(), driver.getCapabilities().getCapability("deviceUDID"));
@@ -85,6 +92,8 @@ public final class DriverManager {
                 .setDisableWindowAnimation(true);
 
         ConfigManager.getOptional("device.udid").ifPresent(options::setUdid);
+        ConfigManager.getOptional("device.language").ifPresent(options::setLanguage);
+        ConfigManager.getOptional("device.locale").ifPresent(options::setLocale);
         ConfigManager.getOptional("app.path").ifPresent(path -> {
             Path apk = Path.of(path).toAbsolutePath();
             if (!Files.isRegularFile(apk)) {
@@ -93,6 +102,21 @@ public final class DriverManager {
             options.setApp(apk.toString());
         });
         return options;
+    }
+
+    /**
+     * Only allowlisted capabilities are logged. A full capability map can carry credentials (for example a cloud
+     * provider's access key), so anything not listed here is never written to logs or reports.
+     */
+    private static Map<String, Object> loggableCapabilities(Capabilities capabilities) {
+        Map<String, Object> loggable = new LinkedHashMap<>();
+        for (String name : LOGGABLE_CAPABILITIES) {
+            Object value = capabilities.getCapability(name);
+            if (value != null) {
+                loggable.put(name, value);
+            }
+        }
+        return loggable;
     }
 
     private static URL serverUrl() {

@@ -1,28 +1,35 @@
 # Execution evidence
 
-A snapshot of one real test run, committed so results can be inspected without a device.
-Regenerate it at any time with `mvn clean test`; the live output goes to `target/` (git-ignored).
+Artifacts from two real runs on 2026-10-25, committed so results can be inspected without a device.
+Regenerate with `mvn clean test`; live output goes to `target/` (git-ignored).
 
-## Run details
+Both runs used an Android emulator (API 35, 1080×2280) with Appium 3.2.2 and UiAutomator2 7.0.0.
+
+## `failure-reproduction/` — the two reviewed failures, reproduced
 
 | | |
 |---|---|
-| Date | 2026-10-21, 15:02 IST |
-| Commit under test | `da79754` ("Make screen-visibility checks return false on timeout; assert listings after login") |
-| Checkout | Clean `git clone` of this repository into `/tmp/tui-clean` (21 tracked files, no local modifications) |
-| Command | `mvn clean test` (no `-D` overrides) |
-| Device | OnePlus Nord CE (EB2101), Android 13, physical, USB |
-| Appium | Server 3.2.2, UiAutomator2 driver 7.0.0, `http://127.0.0.1:4723` |
-| Result | **Tests run: 5, Failures: 0, Errors: 0, Skipped: 0** — BUILD SUCCESS |
-| Scenario duration | 176.6 s (total Maven time 3:00) |
+| Command | `mvn clean test -Ddevice.udid=emulator-5554 -Dapp.path=<apk> -Ddevice.language= -Ddevice.locale=` |
+| Why the extra flags | Blank `device.language` and `device.locale` switch off the en-GB locale pin, so the emulator keeps its own **en-US** locale — the condition under which the failures were reported |
+| Result | **Tests run: 5, Failures: 2** — BUILD FAILURE |
+| Failure 1 | *Successful login opens the listings*: date of birth expected `2009-08-07`, found `2009-07-08` |
+| Failure 2 | *Hotel cards show the expected details*: price expected `£1,280`, found `$1,280` |
 
-## Files
+- `screenshots/` — the two PNGs written by the failure hook, unedited. They show the DOB field reading
+  `2009-07-08` and the hotel card priced `$1,280`.
+- `cucumber.html` — the report, with the same screenshots embedded.
+- `test-execution.log` — the framework log. It was produced before the screenshot log line was changed to a
+  project-relative path. **Redacted:** the local home-directory prefix was removed from three
+  file paths (two screenshot paths and the APK path). Nothing else was changed.
 
-| File | Contents |
+## `passing-run/` — after the fix
+
+| | |
 |---|---|
-| `cucumber.html` | The Cucumber HTML report: 5 scenarios, 42 steps, all PASSED. Open it in a browser |
-| `test-execution.log` | The framework log at DEBUG, with the scenario name on every line |
+| Command | `mvn clean test -Ddevice.udid=emulator-5554` (default configuration) |
+| Starting state | The emulator was set back to en-US immediately before this run, so the pass comes from the locale pin rather than leftover device state |
+| Result | **Tests run: 5, Failures: 0, Errors: 0, Skipped: 0** — BUILD SUCCESS, 135.8 s, no retries |
+| Code | The final code in this commit |
 
-This run contains **no embedded screenshots**, because no scenario failed. Screenshots are attached to the
-report only on failure; that behaviour was verified separately by forcing an assertion failure and extracting
-the embedded PNG (see `DECISIONS.md`, section 7).
+- `cucumber.html` — 5 scenarios, all passing, no attachments (nothing failed).
+- `test-execution.log` — the framework log; it contains no local file paths.

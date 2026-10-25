@@ -8,12 +8,18 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.ThreadContext;
 import org.openqa.selenium.OutputType;
-import org.openqa.selenium.WebDriverException;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 /** The single owner of the driver lifecycle: one fresh session per scenario. */
 public class Hooks {
 
     private static final Logger LOG = LogManager.getLogger(Hooks.class);
+    private static final Path SCREENSHOT_DIR = Path.of("target", "screenshots");
+    private static final DateTimeFormatter TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
 
     @Before
     public void startDriver(Scenario scenario) {
@@ -23,12 +29,15 @@ public class Hooks {
         DriverManager.startDriver();
     }
 
-    /** Captures failure evidence before the session ends; quitting always runs, even if the screenshot fails. */
+    /**
+     * Captures failure evidence before the session ends. Quitting always runs, and a screenshot problem is only
+     * logged, so it can neither skip teardown nor replace the scenario's original failure.
+     */
     @After
     public void captureEvidenceAndQuit(Scenario scenario) {
         try {
             if (scenario.isFailed() && DriverManager.hasDriver()) {
-                attachScreenshot(scenario);
+                captureScreenshot(scenario);
             }
         } finally {
             DriverManager.quitDriver();
@@ -37,13 +46,21 @@ public class Hooks {
         }
     }
 
-    private static void attachScreenshot(Scenario scenario) {
+    /** Writes the screenshot to target/screenshots/ and embeds the same image in the Cucumber HTML report. */
+    private static void captureScreenshot(Scenario scenario) {
         try {
             byte[] png = DriverManager.getDriver().getScreenshotAs(OutputType.BYTES);
             scenario.attach(png, "image/png", "Failure screenshot");
-            LOG.info("Attached failure screenshot to the report");
-        } catch (WebDriverException e) {
-            LOG.warn("Could not capture failure screenshot: {}", e.getMessage());
+            Files.createDirectories(SCREENSHOT_DIR);
+            Path file = SCREENSHOT_DIR.resolve(LocalDateTime.now().format(TIMESTAMP) + "_" + fileSafe(scenario.getName()) + ".png");
+            Files.write(file, png);
+            LOG.info("Failure screenshot saved to {}", file);
+        } catch (Exception e) {
+            LOG.warn("Could not capture failure screenshot: {}", e.toString());
         }
+    }
+
+    private static String fileSafe(String scenarioName) {
+        return scenarioName.replaceAll("[^A-Za-z0-9]+", "-").replaceAll("(^-|-$)", "");
     }
 }

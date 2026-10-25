@@ -8,10 +8,13 @@
 
 ### Implemented and validated (Android)
 - A single Android path: Appium 3.2.2 + UiAutomator2 7.0.0 + java-client 10.1.1 driving
-  `com.tui.qa.challenge` on a physical OnePlus Nord CE (EB2101, Android 13).
-- Five Cucumber scenarios, run from the terminal with `mvn clean test`, passing 5/5 — including from a clean
-  `git clone` of commit `da79754` on 2026-10-21 (176.6 s). Tag filtering works.
-- Cucumber HTML report with failure screenshots embedded, and a DEBUG log carrying the scenario name.
+  `com.tui.qa.challenge`, with the session pinned to the en-GB locale.
+- Five Cucumber scenarios passing 5/5 from the terminal with `mvn clean test` on an Android emulator (API 35)
+  and a physical OnePlus Nord CE (Android 13), on 2026-10-25. Tag filtering works.
+- Cucumber HTML report, failure screenshots on disk and embedded in the report, and a DEBUG log carrying the
+  scenario name.
+- Retry for environmental failures, verified with a controlled temporary scenario.
+- A GitHub Actions workflow for compilation and Gherkin validation, statically checked; not yet run on GitHub.
 - See `evidence/` and the status table in `DECISIONS.md` for the run that backs these claims.
 
 ### Not implemented and not validated
@@ -19,10 +22,8 @@
 |---|---|
 | iOS simulator or physical iOS device | Not implemented. No iOS app artifact, no macOS/Xcode setup performed |
 | Device clouds (BrowserStack, Sauce Labs, LambdaTest) | Not implemented. No account used |
-| GitHub Actions CI | **Not implemented.** There is no `.github/workflows/` directory; no workflow has been written, statically checked or run |
+| UI tests in CI | **Not implemented.** The existing workflow only compiles and dry-runs the features |
 | Parallel execution | Not implemented. One scenario at a time, one device |
-| Retry on failure | Not implemented, deliberately descoped |
-| Android emulator end-to-end run | Not validated. An emulator was booted during development but the suite was never completed on it |
 
 ## 2. Cross-platform architecture
 
@@ -102,13 +103,12 @@ evidence survives a failing run:
 
 ### Open dependencies and risks
 
-1. **No approved APK source.** The APK is not in the repository, and GitHub secrets cap well below its size, so
-   the workflow needs an agreed artifact source before it can run.
-2. **Device locale affects the date picker.** The dialog used `DD/MM/YYYY` on an `en_IN` device; Material 3
-   derives that mask from the locale, so a differently configured emulator may break the login scenarios.
-   Untested hypothesis; Appium's `language`/`locale` capabilities would address it.
-3. **Emulator differences.** A cold emulator needs a longer explicit wait, and a shorter screen requires more
-   scrolls than the physical device used for validation.
+1. **APK source.** The repository now contains `TUIChallengeApp.zip`, so an Android job could unzip it; whether
+   redistributing the app this way is permitted should be confirmed before relying on it.
+2. **Device locale.** The app formats dates and prices from the device locale. This was confirmed on an en-US
+   emulator and is handled by pinning sessions to en-GB; an iOS job would need the equivalent setting.
+3. **Emulator differences.** A cold emulator may need a longer explicit wait, and a shorter screen requires more
+   scrolls than the devices used for validation.
 
 ## 5. Parallel execution safety
 
@@ -137,12 +137,11 @@ in one thread leaving the other thread's results and screenshots intact.
 - **Nothing in this document has been executed.** iOS, cloud, CI and parallel execution are all unimplemented.
 - The iOS locator mapping assumes the iOS app exposes identifiers comparable to the Android test tags. If it
   does not, the page layer needs more platform-specific code than estimated here.
-- The device-locale issue above is an untested hypothesis, and may not be the only platform difference that
-  surfaces on a different device or Android version.
-- **A defect to fix before any cloud use:** `DriverManager` logs the full capability map at session start. Cloud
-  capabilities carry access keys, so that log line must be redacted first or credentials will be written to the
-  log file and CI artifacts.
+- Locale was the platform difference that surfaced on the emulator; other differences may appear on other
+  devices or Android versions.
+- Capability logging is now an explicit allowlist, so cloud credentials would not be logged. Cloud credentials
+  themselves would still need to come from CI secrets.
 - `testdata/listings.json` was extracted from the current APK's bundled assets. A different app build, or a
   version that fetches live data, would invalidate the expected values on every platform.
-- The framework has been validated on one physical Android device only. Behaviour on emulators, other Android
-  versions and other screen sizes is unverified.
+- The framework has been validated on one emulator and one physical device, both in en-GB. Other Android
+  versions and screen sizes are unverified.
