@@ -33,3 +33,25 @@ Both runs used an Android emulator (API 35, 1080×2280) with Appium 3.2.2 and Ui
 
 - `cucumber.html` — 5 scenarios, all passing, no attachments (nothing failed).
 - `test-execution.log` — the framework log; it contains no local file paths.
+
+## `passing-run/screenshots/` — manual screenshots of a later run
+
+Captured by hand on 2026-10-26 from a separate local run, not the 2026-10-25 run whose report and log are above.
+
+| | |
+|---|---|
+| Command | `mvn clean test` with the default configuration |
+| Device | Physical Android phone (OnePlus Nord CE, Android 13), mirrored to the desktop |
+| Result | **Tests run: 5, Failures: 0, Errors: 0, Skipped: 0** — BUILD SUCCESS, 2:46 min, finished 2026-10-26 17:18:53 +05:30 |
+
+- `2026-10-26_01_terminal-run-start-category-tabs-passing.png` — start of the run: the first scenario's session
+  and its passing steps.
+- `2026-10-26_02_terminal-5-of-5-passed-build-success.png` — the last scenario, then the Surefire summary and
+  `BUILD SUCCESS`.
+- `2026-10-26_03_cucumber-report-5-of-5-passed.png` — the Cucumber HTML report: 100% (5/5) passed.
+
+**Cropped, not otherwise edited.** The originals were full-desktop screenshots; they were cropped to the
+terminal output and the report body to remove personal and workplace details (the desktop dock and menu bar, an
+IDE status bar and a browser address bar containing a local home-directory path). No text in the images was
+altered.
+
