@@ -42,7 +42,7 @@ Cucumber BDD and Maven. Five scenarios cover the login screen and the travel lis
 pom.xml                      Build, pinned dependency versions, enforcer rules
 README.md                    This file
 DECISIONS.md                 Design decisions and requirement status
-CROSS_PLATFORM_DESIGN.md     iOS, cloud and parallel execution design (not implemented)
+CROSS_PLATFORM_DESIGN.md     Parallel, iOS, cloud and CI-matrix design (design only)
 evidence/                    Reports, logs and screenshots from documented runs
 .github/workflows/build.yml  CI: compile and Gherkin validation (no UI tests)
 src/test/java/com/tui/automation/
@@ -218,6 +218,20 @@ is normally applied by then, and later sessions skip the change.
 **Build fails on the enforcer rules**
 `requireJavaVersion [17,)` or `requireMavenVersion [3.9,)` failed. Check `mvn -v`, which reports the JDK Maven
 itself uses; that can differ from your shell's `java -version`.
+
+## Future work (design only)
+
+Neither of these is implemented, configured or tested. The full design, risks and validation plan are in
+`CROSS_PLATFORM_DESIGN.md`.
+
+- **Parallel Android execution.** Scenarios would run concurrently through Cucumber's TestNG data provider, with
+  the worker count bounded by the number of devices and defaulting to 1. Each worker would claim its own device
+  and UiAutomator2 `systemPort` from a pool. `DriverManager`'s `ThreadLocal` is a precondition only; it does not
+  make the suite parallel or prove it thread-safe.
+- **iOS.** A `-Dplatform=android|ios` switch and a per-platform driver factory would add an `IOSDriver` /
+  XCUITest branch beside today's Android one. It would need macOS, Xcode, a simulator or registered device, an
+  iOS build of the app and WebDriverAgent signing for real devices. Locators would be resolved per platform,
+  because Compose test tags and iOS accessibility identifiers are located differently.
 
 ## Current limitations
 

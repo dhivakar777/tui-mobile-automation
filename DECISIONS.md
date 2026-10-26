@@ -210,33 +210,22 @@ fails the build if any feature step lacks a definition. Reports are uploaded eve
 no emulator and runs no UI test. The workflow passes `actionlint`, and both Maven commands were run verbatim
 locally from a clean `target/`; it has **not yet run on GitHub Actions**.
 
-**Design only — everything below.** Emulator execution in CI and iOS are not implemented.
+**Design only — parallel execution, iOS, cloud and UI tests in CI.** None is implemented or tested. The full
+design is in `CROSS_PLATFORM_DESIGN.md`; the decisions that shape it are:
 
-**Separate jobs per platform.** Android on a Linux runner with an emulator; iOS on a macOS runner with a
-simulator, because iOS automation requires macOS and Xcode. The jobs are independent, so they can run
-concurrently when runner capacity allows, and neither needs the other's toolchain. Each job sets up JDK 17 with
-Maven caching, installs Appium and its platform driver, starts the server as a background step and waits for it
-to report ready, then runs `mvn clean test` with the platform and APK path passed as `-D` overrides. A Maven
-failure fails the job, so a genuine test failure fails the pipeline.
+| Decision | Reason | Trade-off |
+|---|---|---|
+| Parallelism through Cucumber's `scenarios()` data provider, bounded by device count, default 1 | All scenarios run through one TestNG method, so the data provider is the only place to parallelise scenarios; a default of 1 keeps runs sequential unless requested | Needs a thread count and device list configured together |
+| Device and `systemPort` allocated together from a pool, claimed in `@Before` and released in `finally` | `ThreadLocal` only separates driver references; without allocation every thread would target the same device and could collide on the UiAutomator2 port | More moving parts in session setup |
+| Platform chosen by `-Dplatform`, with a `DriverFactory` split per platform | The factory split was removed when only Android existed; a second, genuinely different options builder is what justifies it | Reintroduces a class removed during review |
+| Shared feature files, steps and assertions; locators and some page methods per platform | The scenarios are written in business terms, but Compose test tags and iOS accessibility identifiers are located differently, and date entry and masked-field detection differ in interaction | Page classes gain platform branches where screens differ |
+| Platform-specific values only through test-data overrides; unsupported scenarios excluded by tag | Keeps assertions identical across platforms instead of weakening them | Requires per-platform data files once values diverge |
+| One CI job per platform (Ubuntu emulator, macOS simulator), `fail-fast` off, separate artifacts | iOS automation requires macOS; independent jobs run concurrently and one platform cannot hide the other's result | macOS runners are scarcer and more expensive |
 
-**Platform selection** would reintroduce the `-Dplatform` switch and per-platform property files removed
-earlier, with the driver options split into one builder per platform. The existing `@login`, `@listings`,
-`@smoke` and `@negative` tags remain available through `-Dcucumber.filter.tags`, and a platform tag could
-exclude a scenario that does not apply to one platform.
-
-**Isolation for parallelism.** One device and one session per job. Parallelism *within* a job additionally
-requires a device pool so each thread claims its own device, a unique Appium server port per concurrent
-session, and confirmation that evidence stays separated. The current test data is read-only, so concurrent
-reads are safe; any scenario that mutated shared state would need per-thread data.
-
-**Evidence** would be uploaded per platform even when a job fails: the Cucumber HTML report with embedded
-failure screenshots, the execution log, TestNG output, and the Appium server log written outside `target/` so
-the build's clean step cannot remove it.
-
-**Next step towards emulator execution.** Add an Ubuntu job that enables KVM, boots an emulator, installs
-Appium 3.2.2 with UiAutomator2 7.0.0, starts the server and runs `mvn clean test -Dapp.path=<apk>`. The APK is
-available in the repository as `TUIChallengeApp.zip`. The locale risk identified during design is now handled by
-the en-GB pin; a cold emulator may still need `-Dtimeout.explicit.wait.seconds=30`.
+**Next step towards emulator execution in CI.** An Ubuntu job that enables KVM, boots an emulator, installs
+Appium 3.2.2 with UiAutomator2 7.0.0, starts the server and runs `mvn clean test -Dapp.path=<apk>`, using the
+committed `TUIChallengeApp.zip` once its use is confirmed. A cold emulator may need
+`-Dtimeout.explicit.wait.seconds=30`.
 
 ## Validation and Requirement Status
 
@@ -269,10 +258,10 @@ the en-GB pin; a cold emulator may still need `-Dtimeout.explicit.wait.seconds=3
 | Safe capability logging | Implemented, verified in the session log |
 | **CI workflow** | **Implemented (build validation only), not yet run on GitHub Actions.** No UI tests in CI |
 | `.gitignore` hygiene; no secrets committed | Implemented. History pattern-scanned for credentials; not a full audit |
-| **ThreadLocal driver management** | **Implemented, not verified** — only ever run single-threaded |
-| **Parallel execution** | **Not implemented.** Needs a device pool, unique Appium ports per session and a parallel runner |
+| **ThreadLocal driver management** | **Implemented, not tested concurrently** — only ever run single-threaded, so thread safety is unverified |
+| **Parallel execution** | **Design only, not implemented.** Needs a parallel data provider, a device pool and a unique `systemPort` per session; see `CROSS_PLATFORM_DESIGN.md` §2 |
 | **Emulator execution in CI** | **Not implemented** — next step described above |
-| **iOS support** | **Design only** |
+| **iOS support** | **Design only, not implemented or tested.** No iOS build, XCUITest configuration or iOS code; see `CROSS_PLATFORM_DESIGN.md` §3 |
 | **Cloud device execution** | **Investigated, not executed.** No account used. The capability-logging prerequisite it identified is now fixed |
 
 **Other limitations.** Verification covers one emulator and one phone, both forced to en-GB. The expected

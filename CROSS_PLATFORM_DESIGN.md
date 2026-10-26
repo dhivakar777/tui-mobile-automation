@@ -1,147 +1,261 @@
-# Cross-platform, CI and parallel execution design
+# Parallel execution, iOS and CI design
 
-> **Status: design only.** Nothing in this document is implemented. iOS execution, device-cloud execution,
-> CI and parallel execution have never been run against this framework. Statements about what *would* happen
-> are proposals, not results.
+> **Status.** Android is the only implemented platform, and the suite runs **one scenario at a time on one
+> device**. Everything in sections 2–5 — parallel execution, iOS support, cloud execution and the CI matrix — is a
+> **proposal**: not implemented, not configured and not tested. No runner setting, thread count, port allocation
+> or iOS code described here exists in the repository.
 
 ## 1. Current state
 
-### Implemented and validated (Android)
-- A single Android path: Appium 3.2.2 + UiAutomator2 7.0.0 + java-client 10.1.1 driving
-  `com.tui.qa.challenge`, with the session pinned to the en-GB locale.
-- Five Cucumber scenarios passing 5/5 from the terminal with `mvn clean test` on an Android emulator (API 35)
-  and a physical OnePlus Nord CE (Android 13), on 2026-10-25. Tag filtering works.
-- Cucumber HTML report, failure screenshots on disk and embedded in the report, and a DEBUG log carrying the
-  scenario name.
-- Retry for environmental failures, verified with a controlled temporary scenario.
-- A GitHub Actions workflow for compilation and Gherkin validation, statically checked; not yet run on GitHub.
-- See `evidence/` and the status table in `DECISIONS.md` for the run that backs these claims.
-
-### Not implemented and not validated
-| Item | Status |
-|---|---|
-| iOS simulator or physical iOS device | Not implemented. No iOS app artifact, no macOS/Xcode setup performed |
-| Device clouds (BrowserStack, Sauce Labs, LambdaTest) | Not implemented. No account used |
-| UI tests in CI | **Not implemented.** The existing workflow only compiles and dry-runs the features |
-| Parallel execution | Not implemented. One scenario at a time, one device |
-
-## 2. Cross-platform architecture
-
-### What is already platform-neutral
-These need no change to serve a second platform:
-
-- `features/*.feature` — written in business language, with no Android terms.
-- `stepdefinitions/` — they call page methods and assert; they contain no locators.
-- `testdata/*.json` and `utilities/` — data and its record types.
-- `config/ConfigManager` — a properties file plus `-D` overrides.
-- `hooks/Hooks` — start driver, capture failure evidence, quit.
-- `runners/TestRunner` — feature discovery, glue and reporting.
-- `DriverManager`'s `ThreadLocal` lifecycle and the W3C touch drag used for scrolling.
-
-### What is Android-specific today
-Found by inspecting the code; these are the only places a second platform would touch:
-
-| Location | Android-specific detail | iOS equivalent |
+| Capability | Status | Basis |
 |---|---|---|
-| `DriverManager.startDriver()`, `androidOptions()` | `UiAutomator2Options`, `AndroidDriver` | `XCUITestOptions`, `IOSDriver` |
-| `BasePage.byTag()` | `new UiSelector().resourceId(...)` for Compose test tags | `AppiumBy.accessibilityId(...)` for `accessibilityIdentifier` |
-| `ListingsPage.CARD_NAMES` | `UiSelector().resourceIdMatches("content_card_hotel_name_[0-9]+")` | iOS predicate, e.g. `name BEGINSWITH 'content_card_hotel_name_'` |
-| `ListingsPage.isSelected()`, `cardIndex()` | `selected` and `resource-id` attributes | `selected` / `value` and `name` attributes |
-| `LoginPage.isPasswordMasked()` | the `password` attribute | a secure field is a distinct element type (`XCUIElementTypeSecureTextField`) |
-| `LoginPage`, `ListingsPage` child lookups | `android.widget.EditText`, `android.view.View`, `android.widget.TextView` | different class names; prefer identifiers over class names on both platforms |
-| `LoginPage.selectDateOfBirth()` | Material 3 date dialog, text-input mode, `dd/MM/yyyy` | `UIDatePicker`, a different interaction model |
+| Android UI scenarios (5) | **Implemented, locally validated** | 5/5 on an Android emulator (API 35) and on a physical Android 13 phone, 2026-10-25; see `evidence/` |
+| Locale pinning (en-GB), retry for environmental failures, failure screenshots, allowlisted capability logging | **Implemented, locally validated** | See `DECISIONS.md` → Validation and Requirement Status |
+| GitHub Actions build workflow (compile + Cucumber dry run) | **Implemented, not CI-validated** | Passes `actionlint` and its commands pass locally; it has **not yet run on GitHub Actions**. It runs no UI test |
+| `ThreadLocal` driver storage | **Implemented, not tested concurrently** | Only ever exercised single-threaded |
+| Parallel execution | **Design only** — section 2 | |
+| iOS | **Design only** — section 3 | |
+| Cloud devices | **Design only** — section 4 | |
+| UI tests in CI; Android + iOS CI matrix | **Design only** — section 5 | |
 
-### Selected approach
+## 2. Parallel Android execution — design only
 
-Keep driver configuration and locators platform-specific, and share everything above them.
+### 2.1 Why `ThreadLocal` is not enough
 
-- **Platform selection by configuration.** A `-Dplatform=android|ios` switch selecting
-  `config/android.properties` or `config/ios.properties`.
-- **Driver options split per platform**, one builder each, reading its own configuration. Only the options
-  builder and driver type differ.
-- **Locators resolved per platform**, ideally with the same identifier strings in both apps. If the iOS app
-  exposes identifiers comparable to the Android test tags, only `BasePage.byTag()` and the handful of attribute
-  reads above need to branch, and each page class stays single.
-- **Platform-specific page behaviour only where screens genuinely differ** — the date picker being the clear
-  case — via a platform check in that one method or a platform subclass of that page.
+`DriverManager` keeps the driver in a `ThreadLocal`, so two threads would each hold their own session object.
+That prevents threads from *sharing a driver reference*, but nothing else:
 
-Feature files, step definitions, test data, hooks, the runner and reporting stay shared.
+- every thread would still read the same single `device.udid`, so two sessions would try to drive one device;
+- two UiAutomator2 sessions on one Appium server need different on-device server ports;
+- `TestRunner` runs scenarios sequentially, so no second thread exists today;
+- shared resources — the log file, screenshot directory, Cucumber report, retry counters, device locale — have
+  never been observed under concurrency.
 
-## 3. iOS prerequisites
+`ThreadLocal` is therefore a precondition, not evidence. Thread safety is unverified until the validation in
+2.8 has been carried out.
 
-Design prerequisites only; none of this has been set up or verified.
+### 2.2 Bounded parallel scenarios (proposed, not enabled)
 
-- **macOS with Xcode.** iOS automation cannot run on Linux, so it needs a macOS machine or a `macos-*` CI runner.
-- **An iOS build of the application.** A simulator build and a physical-device build are different artifacts;
-  a physical device additionally requires Apple Developer signing.
-- **Appium's XCUITest driver**, with iOS capabilities supplied through the platform configuration file.
+Cucumber's TestNG runner exposes scenarios through a `@DataProvider` (`scenarios()` in
+`AbstractTestNGCucumberTests`). Parallelism would be switched on by overriding it — **this override does not
+exist in `TestRunner`**:
 
-## 4. CI strategy
+```java
+// PROPOSED — not in the repository
+@Override
+@DataProvider(parallel = true)
+public Object[][] scenarios() {
+    return super.scenarios();
+}
+```
 
-### One job per platform
-Run Android and iOS as **separate jobs**, each with its own runner, device and evidence, rather than mixing
-platforms in one JVM. Platform jobs are independent, so they run concurrently whenever runner capacity allows.
+The worker count would be bounded by TestNG's `dataproviderthreadcount`, passed through Surefire, and must never
+exceed the number of available devices. The default would remain **1**, so the suite stays sequential unless
+parallelism is requested explicitly. Surefire's own `<parallel>` setting would not be used: all scenarios run
+through the single `runScenario` method, so method-level parallelism would not run scenarios concurrently.
 
-| Job | Runner | Device | Notes |
+### 2.3 One session per worker
+
+Each worker thread would own exactly one Appium session for the duration of one scenario, created in `@Before`
+and quit in `@After` — the lifecycle `Hooks` already implements. The existing guarantees carry over: a second
+start on the same thread is rejected, and `quitDriver()` always clears the thread slot in a `finally` block.
+What is new is that the device and ports for that session would come from an allocator rather than from global
+configuration (2.4, 2.5).
+
+### 2.4 Device allocation
+
+A device pool would replace the single `device.udid`:
+
+- a proposed key such as `device.udids` holding a comma-separated list of connected devices or emulators;
+- a thread-safe queue of free devices; `@Before` **takes** a device (blocking until one is free), `@After`
+  **returns** it in a `finally` block, including when session creation or teardown fails;
+- a session is never created without a claimed device, so two workers cannot control the same device;
+- the pool is sized from the list, and the worker count is capped at the pool size.
+
+### 2.5 Per-session ports
+
+Each session on one Appium server needs ports that no other live session uses:
+
+| Driver | Port | Purpose |
+|---|---|---|
+| UiAutomator2 | `appium:systemPort` | Host port forwarded to the UiAutomator2 server on the device |
+| UiAutomator2 | `appium:mjpegServerPort` | Only if screen streaming or recording is added |
+| XCUITest (future) | `appium:wdaLocalPort` | Host port forwarded to WebDriverAgent |
+
+Proposal: assign ports **with the device**, not independently — each pool entry carries its own fixed port
+(for example device *n* uses a fixed base port plus *n*) — so a port is never reused while its device is
+claimed, and collisions become deterministic and diagnosable. Before use, each port is checked as free on the
+host; on teardown the session is quit so Appium removes its port forward. A cleanup check after a run confirms
+no forward or UiAutomator2 server is left behind. The UiAutomator2 driver documents automatic selection of a
+free `systemPort` when none is given; that has not been tested here, and explicit allocation is preferred so
+failures can be traced to a specific device.
+
+### 2.6 Isolation of state, data and evidence
+
+| Concern | Today | Requirement under parallelism |
+|---|---|---|
+| Scenario state | Each scenario starts with app data cleared (`noReset=false`); step classes are created per scenario | Unchanged; no static mutable state may be added to steps or pages |
+| Test data | JSON read into immutable records; read-only | Safe to share; any future data that is mutated or consumed (accounts, bookings) must be allocated per worker |
+| Configuration | Read-only properties and JVM system properties | Device and port values must come from the allocator, not global properties |
+| Device locale | Set per session by Appium | Set per device; the first-session locale change is already the most fragile step and would run on every device |
+| Logs | One file; every line carries the scenario name | Add the device id to the log context; optionally route each scenario to its own file |
+| Screenshots | `target/screenshots/<timestamp>_<scenario>.png` | Add the device id to the name, so simultaneous failures of a retried or duplicated scenario cannot collide |
+| Cucumber report | One HTML file written at the end | Confirm that concurrently finishing scenarios are all recorded and correctly attributed |
+| Retry | One `RetryAnalyzer` per scenario parameter set (TestNG keeps an analyzer per data-provider parameters) | Confirm the counter is not shared between workers and that a retry claims a device like any other attempt |
+
+### 2.7 Local devices versus a device farm
+
+| Setting | Local | Future cloud / device farm |
+|---|---|---|
+| Worker count | Number of connected devices or emulators; default 1 | The plan's concurrent-session limit |
+| Device allocation | The local pool (2.4) | The provider assigns devices from requested capabilities; no local pool |
+| Ports | Allocated per device (2.5) | Managed by the provider; not configured locally |
+| Appium server | Local, one server or one per device | The provider's hub, set through `appium.server.url` |
+| Credentials | None | From CI secrets or local environment, e.g. `CLOUD_USERNAME` / `CLOUD_ACCESS_KEY` placeholders; never in source, config files or logs |
+
+### 2.8 Risks, prerequisites and validation plan
+
+**Prerequisites:** at least two devices or emulators with enough host CPU and memory to run them together, and a
+decision on where per-device configuration lives.
+
+**Risks:** emulator instability under load (one emulator already stopped responding after repeated locale
+changes); port collisions with other tools; the Cucumber report and retry under concurrency; longer suite time
+than expected if the host cannot sustain several emulators.
+
+**Implementation and validation steps, in order:**
+1. Add the device pool and per-device ports; run sequentially with a pool of one to prove nothing regresses.
+2. Add the parallel data provider with the thread count still at 1; confirm identical results.
+3. Run with 2 devices and 2 workers, repeated several times; results must match the sequential run.
+4. Force a failure in one worker; the other worker's result, screenshot and log lines must be unaffected.
+5. After each run, confirm no leaked sessions, port forwards or UiAutomator2 servers remain.
+6. Exercise retry under concurrency with a controlled temporary scenario, then remove it.
+7. Only then document parallel execution as implemented, with the run evidence.
+
+## 3. iOS support — design only
+
+Nothing for iOS exists in this repository: no iOS app build, no XCUITest configuration, no iOS code. Android
+remains the only implemented and tested platform.
+
+### 3.1 Platform selection and driver creation (proposed)
+
+- A `-Dplatform=android|ios` system property, defaulting to `android`, selects `config/android.properties` or
+  `config/ios.properties`. This mechanism existed briefly and was removed when only Android was present.
+- A small `DriverFactory` interface with one implementation per platform, chosen by the platform setting.
+  `DriverManager` keeps its current role — one session per thread, start, get, quit — and delegates session
+  creation to the factory. This is the point at which the factory split, removed earlier as unnecessary,
+  becomes worthwhile: there would be two genuinely different builders.
+
+| Branch | Options | Driver | Status |
 |---|---|---|---|
-| Android | `ubuntu-latest` | Emulator via `reactivecircus/android-emulator-runner` | Needs a KVM udev rule for hardware acceleration. Linux runners are cheaper and faster than macOS |
-| iOS | `macos-latest` | iOS simulator via `xcrun simctl` | macOS runners are required and are billed at a higher rate |
+| Android | `UiAutomator2Options` | `AndroidDriver` | **Implemented** (today inside `DriverManager`) |
+| iOS | `XCUITestOptions` | `IOSDriver` | **Proposed only — not implemented, not tested** |
 
-Each job would set up JDK 17 with Maven caching, install Appium and its platform driver, start the device and
-the Appium server, make the app artifact available, then run `mvn clean test` with the platform and APK path
-passed as `-D` overrides. A Maven failure fails the job, so a genuine test failure fails the pipeline. Neither
-job should be allowed to mask the other's result.
+Both branches would log only the allowlisted capabilities, which would need extending with the iOS names.
 
-### Evidence collection per platform
-Each job uploads its own artifact (`test-evidence-android`, `test-evidence-ios`) with `if: always()`, so
-evidence survives a failing run:
+### 3.2 iOS prerequisites
 
-- `target/cucumber-reports/cucumber.html` — the report, with failure screenshots embedded
-- `target/logs/test-execution.log` — the framework log
-- `target/surefire-reports/` — TestNG output
-- the Appium server log, written outside `target/` so `mvn clean` cannot delete it
+- macOS with Xcode and its command-line tools; iOS automation cannot run on Linux.
+- An iOS simulator, or a physical device registered with an Apple Developer team.
+- Appium's XCUITest driver (`appium driver install xcuitest`), checked with `appium driver doctor xcuitest`.
+- WebDriverAgent: built automatically for simulators; for physical devices it must be signed with the team's
+  identity (`appium:xcodeOrgId`, `appium:xcodeSigningId`). Team identifiers and any signing material belong in
+  the local environment or CI secrets, not in committed configuration.
+- An iOS build of the app: a `.app` bundle for simulators, a signed `.ipa` for devices. None is available today.
 
-### Open dependencies and risks
+### 3.3 Platform-specific configuration (proposed `config/ios.properties`)
 
-1. **APK source.** The repository now contains `TUIChallengeApp.zip`, so an Android job could unzip it; whether
-   redistributing the app this way is permitted should be confirmed before relying on it.
-2. **Device locale.** The app formats dates and prices from the device locale. This was confirmed on an en-US
-   emulator and is handled by pinning sessions to en-GB; an iOS job would need the equivalent setting.
-3. **Emulator differences.** A cold emulator may need a longer explicit wait, and a shorter screen requires more
-   scrolls than the devices used for validation.
+| Key | Purpose |
+|---|---|
+| `app.path` or `app.bundle.id` | Install from a `.app`/`.ipa`, or launch an installed app by bundle identifier |
+| `device.name` | Simulator or device name, e.g. `iPhone 15` |
+| `platform.version` | iOS version of the simulator or device |
+| `device.udid` | Required for physical devices; optional for simulators |
+| `device.language`, `device.locale` | The same en-GB requirement as Android, applied through the XCUITest equivalents; how fully they apply on physical devices must be checked |
+| `wda.local.port` | Per-session WebDriverAgent port, needed once iOS runs in parallel |
 
-## 5. Parallel execution safety
+### 3.4 Page objects and locators
 
-An Appium session owns one device and one app, so two scenarios sharing a session would interleave taps and
-produce meaningless results. Isolation must cover the session, the device, the Appium server ports and the
-evidence.
+The same locator strategy cannot be assumed to work on both platforms.
 
-`DriverManager` stores the driver in a `ThreadLocal`, creates one session per start, rejects a second start on
-the same thread, and clears the slot on quit. That is the right shape for one session per thread, but
-**`ThreadLocal` alone does not prove that parallel execution works, and parallel execution has not been
-validated** — the suite has only ever run single-threaded.
+- **Android today:** Jetpack Compose test tags exposed as resource-ids without a package prefix, located with
+  `UiSelector().resourceId(...)` through `BasePage.byTag()`.
+- **iOS:** elements are identified by `accessibilityIdentifier`, located with `AppiumBy.accessibilityId(...)`;
+  patterns such as "all card names" need an iOS predicate string or class chain instead of `resourceIdMatches`.
+- **Proposal:** page classes keep one set of business methods (`logIn`, `selectTab`, `card`), and each locator is
+  resolved per platform. Where the iOS app uses the same identifier strings, only `byTag()` branches; where
+  identifiers differ, the page declares a per-platform locator pair. Screens whose interaction genuinely differs
+  get platform-specific methods or subclasses.
+- **Known Android-specific code** that would need iOS equivalents: `UiSelector` locators in `BasePage` and
+  `ListingsPage`; the `resource-id`, `password` and `selected` attribute reads; `android.widget.*` and
+  `android.view.View` class-name lookups; and the Material 3 date dialog in `LoginPage.selectDateOfBirth()`.
 
-Enabling it would require:
+### 3.5 Scenario reuse
 
-- **A device pool**, since `device.udid` is a single value and every thread would otherwise target one device.
-- **A unique Appium server port per concurrent session**, or sessions collide.
-- **A parallel runner**, since `TestRunner` is sequential, with the thread count bounded by available devices.
-- **Confirmed evidence isolation.** Log lines already carry the scenario name, and the report is written once at
-  the end; both need checking under concurrency.
+The feature files and step definitions are written in business terms, so the five scenarios are candidates for
+reuse; whether each works on iOS depends on the iOS app, which has not been seen.
 
-Validation would mean repeated multi-device runs with correct counts, no leaked sessions, and a forced failure
-in one thread leaving the other thread's results and screenshots intact.
+| Scenario | Expected reuse | Likely platform-specific work |
+|---|---|---|
+| Mandatory fields are validated | Feature and steps reusable | Error-label locators |
+| Successful login opens the listings | Feature reusable | Date entry through `UIDatePicker`; the displayed date format may differ |
+| Password visibility can be toggled | Feature reusable | Detecting a masked field (secure text field type rather than an attribute) |
+| Category tabs show the matching listings | Feature and steps reusable | Selected-tab state and the card-name pattern; scrolling untested on iOS |
+| Hotel cards show the expected details | Feature and steps reusable | Field locators; price formatting depends on locale |
+
+**Test data and assertions:** assertions stay in shared step definitions and do not branch on platform. Where
+an expected value genuinely differs (a display format, for example), the platform's value would come from a
+platform-specific test-data override, used only for that field. A scenario that does not apply to one platform
+would be excluded with a tag such as `@android-only`, rather than by weakening its assertions.
+
+### 3.6 Risks and implementation plan
+
+**Risks:** the iOS app may not expose identifiers comparable to the Android test tags; date entry and masked-field
+detection differ in interaction model, not just locators; device signing and provisioning are slow to set up;
+macOS runners are scarcer and billed at a higher rate.
+
+**Steps:** obtain an iOS simulator build; inspect it with Appium Inspector to record its identifiers; add the
+platform switch and the `DriverFactory` split with Android unchanged and re-validated; add the iOS options and
+one scenario (*Mandatory fields are validated*); extend scenario by scenario; then run all five repeatedly on a
+simulator before considering devices or CI.
+
+## 4. Cloud devices — design only
+
+Investigated only; no cloud account was used and no cloud session has been created.
+
+- `appium.server.url` would point at the provider's hub; the provider would allocate devices and ports.
+- Apps are uploaded to the provider and referenced by the identifier it returns, instead of a local `app.path`.
+- Credentials come from CI secrets or the local environment (placeholders such as `CLOUD_USERNAME` and
+  `CLOUD_ACCESS_KEY`) and are never written to source, configuration, reports or logs. Capability logging is
+  already an explicit allowlist, so provider credentials passed as capabilities would not be logged.
+- Concurrency would be capped by the plan's session limit (2.7).
+
+## 5. CI strategy — design beyond the existing build job
+
+**Exists today:** `.github/workflows/build.yml` — compile, enforcer rules and a Cucumber dry run on
+`ubuntu-latest`. It runs no UI test and has not yet run on GitHub Actions.
+
+**Proposed, not implemented — UI jobs as a matrix with independent platforms:**
+
+| Job | Runner | Device | Key setup |
+|---|---|---|---|
+| Android UI | `ubuntu-latest` | Emulator (e.g. `reactivecircus/android-emulator-runner`) | Enable KVM; install Appium 3.2.2 and UiAutomator2 7.0.0; start the server and wait for `/status`; unzip the APK; run `mvn clean test -Dapp.path=…` |
+| iOS UI | `macos-*` | iOS simulator via `xcrun simctl` | Install the XCUITest driver; build or cache WebDriverAgent; supply the `.app`; run with `-Dplatform=ios` |
+
+- The two jobs would run concurrently when runner capacity allows; `fail-fast` would be off so one platform
+  cannot hide the other's result. Parallelism *within* a job follows section 2.
+- Each job would upload its own artifact (for example `test-evidence-android`, `test-evidence-ios`) with
+  `if: always()`: `target/cucumber-reports/`, `target/screenshots/`, `target/logs/`, `target/surefire-reports/`
+  and the Appium server log, written outside `target/` so the clean step cannot remove it.
+- A real-device iOS job would need signing material in CI secrets; nothing of that kind exists.
+- **Open dependencies:** permission to use the committed `TUIChallengeApp.zip` in CI; an iOS app build; a cold
+  emulator may need `-Dtimeout.explicit.wait.seconds=30`; a shorter emulator screen needs more scrolls.
 
 ## 6. Risks and limitations
 
-- **Nothing in this document has been executed.** iOS, cloud, CI and parallel execution are all unimplemented.
-- The iOS locator mapping assumes the iOS app exposes identifiers comparable to the Android test tags. If it
-  does not, the page layer needs more platform-specific code than estimated here.
+- Parallel execution, iOS, cloud execution and UI tests in CI are unimplemented and untested.
+- The iOS design assumes the iOS app resembles the Android one; it has not been seen.
 - Locale was the platform difference that surfaced on the emulator; other differences may appear on other
-  devices or Android versions.
-- Capability logging is now an explicit allowlist, so cloud credentials would not be logged. Cloud credentials
-  themselves would still need to come from CI secrets.
-- `testdata/listings.json` was extracted from the current APK's bundled assets. A different app build, or a
-  version that fetches live data, would invalidate the expected values on every platform.
-- The framework has been validated on one emulator and one physical device, both in en-GB. Other Android
-  versions and screen sizes are unverified.
+  devices, OS versions or screen sizes.
+- `testdata/listings.json` is extracted from the current APK's bundled assets; another build would invalidate it
+  on every platform.
+- Android validation covers one emulator and one phone, both running in en-GB.
