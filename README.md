@@ -185,8 +185,8 @@ mvn clean test -Dretry.max.retries=0      # disable retry
    `build-validation-reports` artifact, even when a step fails.
 
 **It does not run the UI tests.** It starts no emulator or Appium server and installs no app. The workflow passes
-`actionlint` and its commands were run locally, but it has **not yet run on GitHub Actions**. The next step is an
-emulator job, described in `DECISIONS.md`.
+`actionlint`, and it **passed on GitHub Actions** on 2026-10-26 (run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288), commit `17dd197`): every
+step succeeded and the reports artifact was uploaded. The next step is an emulator job, described in `DECISIONS.md`.
 
 ## Troubleshooting
 
@@ -236,7 +236,7 @@ Neither of these is implemented, configured or tested. The full design, risks an
 ## Current limitations
 
 - **Android only.** iOS, device clouds and cross-platform execution are design-only; see `CROSS_PLATFORM_DESIGN.md`.
-- **CI validates the build only.** No UI tests run in CI, and the workflow has not yet run on GitHub Actions.
+- **CI validates the build only.** The workflow passes on GitHub Actions, but no UI tests run in CI.
 - **Parallel execution is not implemented.** `DriverManager` keeps one driver per thread, which is a
   precondition, but parallel execution has never been enabled or verified. Single device, single thread today.
 - **Validated on two devices:** an Android emulator (API 35) and a OnePlus Nord CE (EB2101, Android 13), both

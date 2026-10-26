@@ -11,7 +11,7 @@
 |---|---|---|
 | Android UI scenarios (5) | **Implemented, locally validated** | 5/5 on an Android emulator (API 35) and on a physical Android 13 phone, 2026-10-25; see `evidence/` |
 | Locale pinning (en-GB), retry for environmental failures, failure screenshots, allowlisted capability logging | **Implemented, locally validated** | See `DECISIONS.md` → Validation and Requirement Status |
-| GitHub Actions build workflow (compile + Cucumber dry run) | **Implemented, not CI-validated** | Passes `actionlint` and its commands pass locally; it has **not yet run on GitHub Actions**. It runs no UI test |
+| GitHub Actions build workflow (compile + Cucumber dry run) | **Implemented, CI-validated** | Passed on GitHub Actions on 2026-10-26 (run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288)). It runs no UI test |
 | `ThreadLocal` driver storage | **Implemented, not tested concurrently** | Only ever exercised single-threaded |
 | Parallel execution | **Design only** — section 2 | |
 | iOS | **Design only** — section 3 | |
@@ -232,7 +232,7 @@ Investigated only; no cloud account was used and no cloud session has been creat
 ## 5. CI strategy — design beyond the existing build job
 
 **Exists today:** `.github/workflows/build.yml` — compile, enforcer rules and a Cucumber dry run on
-`ubuntu-latest`. It runs no UI test and has not yet run on GitHub Actions.
+`ubuntu-latest`. It passes on GitHub Actions and runs no UI test.
 
 **Proposed, not implemented — UI jobs as a matrix with independent platforms:**
 

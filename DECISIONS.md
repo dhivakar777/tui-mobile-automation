@@ -207,8 +207,8 @@ covered above).
 **Implemented: build validation only.** `.github/workflows/build.yml` runs on push and pull request to `main`:
 JDK 17 with Maven caching, `mvn test-compile` (which also runs the enforcer rules), and a Cucumber dry run that
 fails the build if any feature step lacks a definition. Reports are uploaded even when a step fails. It launches
-no emulator and runs no UI test. The workflow passes `actionlint`, and both Maven commands were run verbatim
-locally from a clean `target/`; it has **not yet run on GitHub Actions**.
+no emulator and runs no UI test. The workflow passes `actionlint`, and it **passed on GitHub Actions** on
+2026-10-26 (run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288), commit `17dd197`), with every step successful and the reports artifact uploaded.
 
 **Design only — parallel execution, iOS, cloud and UI tests in CI.** None is implemented or tested. The full
 design is in `CROSS_PLATFORM_DESIGN.md`; the decisions that shape it are:
@@ -239,7 +239,7 @@ committed `TUIChallengeApp.zip` once its use is confirmed. A cold emulator may n
 | Default `mvn clean test` | OnePlus Nord CE (EB2101), Android 13, en-GB | 5 run, 0 failures, 149.7 s | Console output only |
 | Temporary retry check (removed afterwards) | Emulator | Environmental failure retried once and passed; assertion failure ran once and failed; `retry.max.retries=0` disabled retry | Not committed |
 | Temporary screenshot-resilience check (removed afterwards) | Phone | Screenshot saved; with the session killed, capture failed with a warning, teardown ran and the original failure was reported | Not committed |
-| CI workflow commands, run locally | — | Both steps pass from a clean `target/` | Not run on GitHub Actions |
+| Build workflow on GitHub Actions (2026-10-26) | GitHub-hosted `ubuntu-latest` runner | All steps passed: compile, enforcer rules, Cucumber dry run (5 scenarios), report upload | run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288) |
 
 | Requirement | Status |
 |---|---|
@@ -256,7 +256,7 @@ committed `TUIChallengeApp.zip` once its use is confirmed. A cold emulator may n
 | Configurable device, APK, server, locale and retry settings | Implemented, verified |
 | **RetryAnalyzer** | **Implemented, verified** with a controlled temporary scenario; not yet observed absorbing a real flake in the five scenarios |
 | Safe capability logging | Implemented, verified in the session log |
-| **CI workflow** | **Implemented (build validation only), not yet run on GitHub Actions.** No UI tests in CI |
+| **CI workflow** | **Implemented and CI-validated (build validation only).** Passed on GitHub Actions; no UI tests in CI |
 | `.gitignore` hygiene; no secrets committed | Implemented. History pattern-scanned for credentials; not a full audit |
 | **ThreadLocal driver management** | **Implemented, not tested concurrently** — only ever run single-threaded, so thread safety is unverified |
 | **Parallel execution** | **Design only, not implemented.** Needs a parallel data provider, a device pool and a unique `systemPort` per session; see `CROSS_PLATFORM_DESIGN.md` §2 |
