@@ -221,8 +221,8 @@ fails the build if any feature step lacks a definition. Reports are uploaded eve
 no emulator and runs no UI test. The workflow passes `actionlint`, and it **passed on GitHub Actions** on
 2026-10-26 (run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288), commit `17dd197`), with every step successful and the reports artifact uploaded.
 
-**Parallel execution — implemented, isolation validated locally; off by default.** iOS, cloud and UI tests in CI
-remain design only. Details, validation and known limitations are in `CROSS_PLATFORM_DESIGN.md`; the decisions
+**Parallel execution — implemented, isolation validated locally; off by default.** Cloud execution is implemented
+for BrowserStack but not verified against BrowserStack. iOS and UI tests in CI remain design only. Details, validation and known limitations are in `CROSS_PLATFORM_DESIGN.md`; the decisions
 that shape them are:
 
 | Decision | Reason | Trade-off |
@@ -274,7 +274,7 @@ committed `TUIChallengeApp.zip` once its use is confirmed. A cold emulator may n
 | **Parallel execution** | **Implemented; isolation validated locally** (emulator + phone, 2026-10-26): no device or port shared, failures isolated, no leaked sessions. Off by default. Under parallel load the emulator intermittently failed to start sessions because of its resource limits; see `CROSS_PLATFORM_DESIGN.md` §2.3 |
 | **Emulator execution in CI** | **Not implemented** — next step described above |
 | **iOS support** | **Design only, not implemented or tested.** No iOS build, XCUITest configuration or iOS code; see `CROSS_PLATFORM_DESIGN.md` §3 |
-| **Cloud device execution** | **Design only, not implemented.** No vendor capabilities, credential handling or hub configuration exist and no cloud session has been created. The logging prerequisites (capability allowlist, URL masking) are in place |
+| **Cloud device execution** | **BrowserStack implemented, not verified against BrowserStack.** No BrowserStack session has been run. The remote-driver path was exercised against a local Appium server, and 9 automated tests with fake credentials verify that credentials never reach logs, console, reports or exception text; see `CROSS_PLATFORM_DESIGN.md` §4 |
 
 **Other limitations.** Verification covers one emulator and one phone, both forced to en-GB. The expected
 listing data is tied to this APK build. Retry absorbs only the listed environmental exceptions; anything else

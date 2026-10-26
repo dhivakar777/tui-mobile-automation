@@ -3,7 +3,8 @@
 > **Status.** Android is the only implemented platform. Parallel Android execution is **implemented** (section 2):
 > scenarios can run concurrently across several devices, each with its own device and UiAutomator2 port, and
 > the isolation mechanism has been validated locally. It is off by default. iOS support, cloud execution and the
-> UI-test CI matrix (sections 3–5) remain **proposals** — not implemented, not configured and not tested.
+> UI-test CI matrix (sections 3 and 5) remain **proposals**; cloud execution (section 4) is implemented for
+> BrowserStack but not yet verified against BrowserStack. These — not implemented, not configured and not tested.
 
 ## 1. Current state
 
@@ -14,7 +15,7 @@
 | GitHub Actions build workflow (compile + Cucumber dry run) | **Implemented, CI-validated** | Passed on GitHub Actions on 2026-10-26 (run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288)). It runs no UI test |
 | Parallel execution across devices (device pool, per-device `systemPort`, parallel data provider) | **Implemented; isolation validated locally** — section 2 | Exercised on an emulator plus a physical phone, 2026-10-26. Off by default |
 | iOS | **Design only** — section 3 | |
-| Cloud devices | **Design only** — section 4 | |
+| Cloud devices | **BrowserStack implemented, not verified against BrowserStack** — section 4 | Remote-driver path exercised against a local Appium server; credential masking tested with fake credentials |
 | UI tests in CI; Android + iOS CI matrix | **Design only** — section 5 | |
 
 ## 2. Parallel Android execution — implemented
@@ -164,18 +165,35 @@ platform switch and the `DriverFactory` split with Android unchanged and re-vali
 one scenario (*Mandatory fields are validated*); extend scenario by scenario; then run all five repeatedly on a
 simulator before considering devices or CI.
 
-## 4. Cloud devices — design only
+## 4. Cloud devices — BrowserStack implemented, not yet verified against BrowserStack
 
-Investigated only; no cloud account was used and no cloud session has been created.
+**Status:** a cloud mode exists for BrowserStack, but **no BrowserStack session has been run**. The remote-driver
+path has been exercised against a local Appium server standing in for a hub, and credential handling has been
+tested with fake credentials. Sauce Labs and other providers are not implemented.
 
-- `appium.server.url` would point at the provider's hub; the provider would allocate devices and ports.
-- Apps are uploaded to the provider and referenced by the identifier it returns, instead of a local `app.path`.
-- Credentials come from CI secrets or the local environment (placeholders such as `CLOUD_USERNAME` and
-  `CLOUD_ACCESS_KEY`) and are never written to source, configuration, reports or logs. Already in place:
-  capability logging is an explicit allowlist, and the server URL is masked (`http://***@host`) in logs and
-  error messages. Still needed: credentials must be read from the environment at runtime, **not passed as `-D`
-  properties**, because Surefire records every system property in `TEST-TestSuite.xml`, which CI uploads.
-- Concurrency would be capped by the plan's session limit (2.4).
+| Piece | Implementation |
+|---|---|
+| Selection | `execution.target=local` (default) or `cloud`. Any other value is rejected; cloud never falls back to local |
+| Driver creation | `DriverManager` sends cloud sessions to `cloud.hub.url` with the shared options plus `cloud.app` (the `bs://…` app id from BrowserStack's app upload), `cloud.device.name` and `cloud.platform.version`. The local device pool, `device.udid`, `app.path` and `systemPort` are not used; setting a local-only key in cloud mode is an error |
+| Provider options | `driver/CloudOptions` builds `bstack:options` with the credentials, project and build names |
+| Credentials | Read only from `BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY` environment variables. Never from config files or `-D` properties (Surefire records every system property in its reports), and a hub URL containing credentials is rejected. A missing variable fails before any session is requested, naming the variable |
+| Logging | `bstack:options` is not on the logging allowlist; the hub URL is masked |
+| Session failures | Selenium's session-creation error quotes the requested capabilities, including the access key, and shortens long values. The failure is rethrown with every message in its cause chain masked — both the exact credential values and the values of credential fields, so a shortened key cannot leak — keeping the original exception types, provider message and stack frames. Cloud session failures are not retried |
+
+**Validation carried out (no cloud account used):**
+- `CloudOptionsTest` (9 device-free tests, fake credentials, a local HTTP server that rejects every session):
+  configuration errors, no local fallback, credentials reaching `bstack:options` but not the logged capabilities,
+  and the masked failure across message, causes, stack trace, captured console output and the log file. With
+  masking disabled the leak tests fail, so they do detect a leak.
+- A cloud-mode Maven run against the rejecting server with fake credentials in environment variables: none of 24
+  output files (console, log, Cucumber report, every Surefire file, screenshots) contained the key, a prefix of it,
+  or the username.
+- A cloud-mode run against the local Appium server as a stand-in hub: a real session was created and the smoke
+  scenario completed.
+
+**Not verified:** BrowserStack acceptance of these capabilities, app upload, the en-GB locale capabilities on
+BrowserStack devices, and BrowserStack's concurrency limits. A real run needs a BrowserStack account (a free trial
+is enough), an uploaded app id and the two environment variables.
 
 ## 5. CI strategy — design beyond the existing build job
 
@@ -200,7 +218,7 @@ Investigated only; no cloud account was used and no cloud session has been creat
 
 ## 6. Risks and limitations
 
-- iOS, cloud execution and UI tests in CI are unimplemented and untested. Parallel execution is implemented, with the limitations in 2.3.
+- iOS and UI tests in CI are unimplemented and untested; BrowserStack execution is implemented but unverified. Parallel execution is implemented, with the limitations in 2.3.
 - The iOS design assumes the iOS app resembles the Android one; it has not been seen.
 - Locale was the platform difference that surfaced on the emulator; other differences may appear on other
   devices, OS versions or screen sizes.

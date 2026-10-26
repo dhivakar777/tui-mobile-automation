@@ -30,7 +30,8 @@ public final class DriverManager {
     private static final Duration NEW_COMMAND_TIMEOUT = Duration.ofSeconds(120);
     private static final List<String> LOGGABLE_CAPABILITIES = List.of(
             "platformName", "appium:automationName", "appium:udid", "appium:app", "appium:appPackage",
-            "appium:appActivity", "appium:language", "appium:locale", "appium:noReset", "appium:systemPort");
+            "appium:appActivity", "appium:language", "appium:locale", "appium:noReset", "appium:systemPort",
+            "appium:deviceName", "appium:platformVersion");
 
     private DriverManager() {
     }
@@ -39,8 +40,16 @@ public final class DriverManager {
         if (DRIVER.get() != null) {
             throw new IllegalStateException("A driver is already running on thread " + Thread.currentThread().getName());
         }
+        if (CloudOptions.isSelected(ConfigManager::getOptional)) {
+            startCloudDriver(new CloudOptions());
+        } else {
+            startLocalDriver();
+        }
+    }
+
+    private static void startLocalDriver() {
         URL serverUrl = serverUrl();
-        UiAutomator2Options options = androidOptions();
+        UiAutomator2Options options = localOptions();
         if (DevicePool.isEnabled()) {
             DevicePool.Device device = DevicePool.claim();
             options.setUdid(device.udid()).setSystemPort(device.systemPort());
@@ -58,6 +67,25 @@ public final class DriverManager {
                         + ". Is the Appium server running and the device listed by 'adb devices'?", e);
             }
             throw e;
+        }
+    }
+
+    /**
+     * Cloud sessions never use the local device pool. Any configuration problem fails here, before a session is
+     * requested, and a session-creation failure is rethrown with the credentials removed from every message in its
+     * cause chain.
+     */
+    private static void startCloudDriver(CloudOptions cloud) {
+        URL hubUrl = cloud.hubUrl();
+        UiAutomator2Options options = cloud.apply(sharedOptions());
+        LOG.info("Creating cloud Android session on {} with capabilities {}", redacted(hubUrl.toString()), loggableCapabilities(options));
+        try {
+            AndroidDriver driver = new AndroidDriver(hubUrl, options);
+            LOG.info("Cloud session {} started", driver.getSessionId());
+            DRIVER.set(driver);
+        } catch (RuntimeException e) {
+            throw CloudOptions.sanitized("Could not start a cloud session on " + redacted(hubUrl.toString())
+                    + ". Check the cloud.* settings and the credential environment variables.", e, cloud.secrets());
         }
     }
 
@@ -100,7 +128,8 @@ public final class DriverManager {
         }
     }
 
-    private static UiAutomator2Options androidOptions() {
+    /** Options used for both local and cloud sessions. */
+    private static UiAutomator2Options sharedOptions() {
         UiAutomator2Options options = new UiAutomator2Options()
                 .setAppPackage(ConfigManager.get("app.package"))
                 .setAppActivity(ConfigManager.get("app.activity"))
@@ -108,10 +137,14 @@ public final class DriverManager {
                 .setNoReset(false)
                 .setNewCommandTimeout(NEW_COMMAND_TIMEOUT)
                 .setDisableWindowAnimation(true);
-
-        ConfigManager.getOptional("device.udid").ifPresent(options::setUdid);
         ConfigManager.getOptional("device.language").ifPresent(options::setLanguage);
         ConfigManager.getOptional("device.locale").ifPresent(options::setLocale);
+        return options;
+    }
+
+    private static UiAutomator2Options localOptions() {
+        UiAutomator2Options options = sharedOptions();
+        ConfigManager.getOptional("device.udid").ifPresent(options::setUdid);
         ConfigManager.getOptional("app.path").ifPresent(path -> {
             Path apk = Path.of(path).toAbsolutePath();
             if (!Files.isRegularFile(apk)) {
@@ -126,7 +159,7 @@ public final class DriverManager {
      * Only allowlisted capabilities are logged. A full capability map can carry credentials (for example a cloud
      * provider's access key), so anything not listed here is never written to logs or reports.
      */
-    private static Map<String, Object> loggableCapabilities(Capabilities capabilities) {
+    static Map<String, Object> loggableCapabilities(Capabilities capabilities) {
         Map<String, Object> loggable = new LinkedHashMap<>();
         for (String name : LOGGABLE_CAPABILITIES) {
             Object value = capabilities.getCapability(name);

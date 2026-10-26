@@ -42,13 +42,14 @@ Cucumber BDD and Maven. Five scenarios cover the login screen and the travel lis
 pom.xml                      Build, pinned dependency versions, enforcer rules
 README.md                    This file
 DECISIONS.md                 Design decisions and requirement status
-CROSS_PLATFORM_DESIGN.md     Parallel execution (implemented) and iOS, cloud, CI-matrix design
+CROSS_PLATFORM_DESIGN.md     Parallel and cloud execution (implemented) and iOS, CI-matrix design
 evidence/                    Reports, logs and screenshots from documented runs
 .github/workflows/build.yml  CI: compile and Gherkin validation (no UI tests)
 src/test/java/com/tui/automation/
   config/ConfigManager       Reads config.properties; any key can be overridden with -Dkey=value
   driver/DriverManager       Creates, exposes and ends the Appium session (one driver per thread)
   driver/DevicePool          Gives each parallel scenario its own device and UiAutomator2 port
+  driver/CloudOptions        BrowserStack settings, credentials from environment variables
   pages/BasePage             Shared driver, explicit wait, Compose test-tag locator
   pages/LoginPage            Login form, password toggle, date-of-birth dialog
   pages/ListingsPage         Category tabs and listing cards, including list scrolling
@@ -86,6 +87,8 @@ of `appium.server.url` in its own logs and errors, but cannot mask Surefire's re
 | `device.language`, `device.locale` | `en`, `GB` | Device locale for the session. The app formats dates and prices from it, and the test data expects en-GB. Appium leaves the device in this locale afterwards; blank both to keep the device's own |
 | `retry.max.retries` | `1` | Extra attempts for a scenario that fails with an environmental error; `0` disables retry |
 | `timeout.explicit.wait.seconds` | `15` | Explicit wait for elements; raise it on slow emulators |
+| `execution.target` | `local` | `local` or `cloud`; anything else is rejected |
+| `cloud.provider`, `cloud.hub.url`, `cloud.app`, `cloud.device.name`, `cloud.platform.version`, `cloud.project.name`, `cloud.build.name` | BrowserStack defaults; app and device blank | Cloud mode only. Credentials are **not** configured here; see *Cloud execution* |
 | `device.udids` | *(blank)* | Devices to share between concurrent scenarios, comma-separated; use instead of `device.udid` for parallel runs |
 | `parallel.threads` (Maven property) | `1` | Scenarios run at once. `1` keeps the suite sequential; must not exceed the devices in `device.udids` |
 
@@ -141,6 +144,21 @@ mvn clean test -Ddevice.udids=emulator-5554,<phone-udid> -Dparallel.threads=2
 Each scenario claims a free device and its own UiAutomator2 port, and returns it when its session ends. Log
 lines and failure screenshot names include the device id. The isolation mechanism has been validated locally on
 an emulator and a phone; see *Current limitations* for the emulator's resource limits.
+
+### Cloud execution (BrowserStack)
+
+Implemented but **not yet verified against BrowserStack**. Upload the APK to BrowserStack App Automate to get a
+`bs://…` app id, then:
+
+```bash
+export BROWSERSTACK_USERNAME=<your-username>     # credentials only as environment variables,
+export BROWSERSTACK_ACCESS_KEY=<your-access-key> # never in config files or -D properties
+mvn clean test -Dexecution.target=cloud -Dcloud.app=bs://<app-id> \
+  -Dcloud.device.name="Google Pixel 7" -Dcloud.platform.version=13.0
+```
+
+Cloud mode never falls back to local execution: a missing setting or variable stops the run before any session is
+requested. Session-creation errors are reported with credentials masked.
 
 ### Tagged execution
 
@@ -244,11 +262,13 @@ Not implemented, configured or tested. The design, risks and validation plan are
   XCUITest branch beside today's Android one. It would need macOS, Xcode, a simulator or registered device, an
   iOS build of the app and WebDriverAgent signing for real devices. Locators would be resolved per platform,
   because Compose test tags and iOS accessibility identifiers are located differently.
-- **Cloud devices** and **UI tests in CI.**
+- **UI tests in CI** and cloud providers other than BrowserStack.
 
 ## Current limitations
 
-- **Android only.** iOS, device clouds and cross-platform execution are design-only; see `CROSS_PLATFORM_DESIGN.md`.
+- **Android only.** iOS and cross-platform execution are design-only; see `CROSS_PLATFORM_DESIGN.md`.
+- **BrowserStack execution is implemented but not verified against BrowserStack.** No BrowserStack session has been
+  run; the remote path was exercised against a local Appium server only.
 - **CI validates the build only.** The workflow passes on GitHub Actions, but no UI tests run in CI.
 - **Parallel execution is off by default.** The device and port isolation was validated on an emulator and a
   phone. Under parallel load the emulator (2.5 GB RAM) intermittently failed to start sessions — an emulator
