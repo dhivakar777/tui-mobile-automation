@@ -171,8 +171,10 @@ Investigated only; no cloud account was used and no cloud session has been creat
 - `appium.server.url` would point at the provider's hub; the provider would allocate devices and ports.
 - Apps are uploaded to the provider and referenced by the identifier it returns, instead of a local `app.path`.
 - Credentials come from CI secrets or the local environment (placeholders such as `CLOUD_USERNAME` and
-  `CLOUD_ACCESS_KEY`) and are never written to source, configuration, reports or logs. Capability logging is
-  already an explicit allowlist, so provider credentials passed as capabilities would not be logged.
+  `CLOUD_ACCESS_KEY`) and are never written to source, configuration, reports or logs. Already in place:
+  capability logging is an explicit allowlist, and the server URL is masked (`http://***@host`) in logs and
+  error messages. Still needed: credentials must be read from the environment at runtime, **not passed as `-D`
+  properties**, because Surefire records every system property in `TEST-TestSuite.xml`, which CI uploads.
 - Concurrency would be capped by the plan's session limit (2.4).
 
 ## 5. CI strategy — design beyond the existing build job

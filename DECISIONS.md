@@ -63,8 +63,13 @@ result reflects the final attempt. A retried attempt stays visible: it is a skip
 a `WARN` log line naming the exception, and a FAILED entry in the Cucumber report — which, not knowing about the
 TestNG retry, lists the passing attempt as a separate entry and still counts the earlier failure in its summary.
 
-**Safe capability logging.** Session start logs an explicit allowlist of capabilities rather than the full map,
-so credentials added later (for example a cloud access key) are never written to logs or reports.
+**Safe capability and URL logging.** Session start logs an explicit allowlist of capabilities rather than the full
+map, so credentials added as capabilities are never written to logs or reports. The server URL is also masked
+(`http://***@host`) wherever the framework logs it or puts it in an error, because cloud hubs are often addressed
+with credentials in the URL; a test with a fake credential in `appium.server.url` confirmed it no longer reaches
+the log, console or Cucumber report. One path is outside the framework's control: Surefire records every `-D`
+system property in `target/surefire-reports/TEST-TestSuite.xml`, so credentials must never be passed as `-D`
+properties.
 
 **Configuration and test data.** Two layers only: `config.properties` for committed defaults, and `-Dkey=value`
 per run. Six keys: server URL, device UDID, APK path, app package, app activity, explicit-wait timeout.
@@ -262,14 +267,14 @@ committed `TUIChallengeApp.zip` once its use is confirmed. A cold emulator may n
 | Driver lifecycle and teardown on failure | Implemented, verified |
 | Configurable device, APK, server, locale and retry settings | Implemented, verified |
 | **RetryAnalyzer** | **Implemented, verified** with a controlled temporary scenario; not yet observed absorbing a real flake in the five scenarios |
-| Safe capability logging | Implemented, verified in the session log |
+| Safe capability and URL logging | Implemented, verified: allowlisted capabilities; a fake URL credential was masked in the log, console and report. Surefire's own record of `-D` properties is outside the framework |
 | **CI workflow** | **Implemented and CI-validated (build validation only).** Passed on GitHub Actions; no UI tests in CI |
 | `.gitignore` hygiene; no secrets committed | Implemented. History pattern-scanned for credentials; not a full audit |
 | **ThreadLocal driver management** | **Implemented, exercised with 2 concurrent threads** — combined with the device pool, sessions stayed on separate devices and ports |
 | **Parallel execution** | **Implemented; isolation validated locally** (emulator + phone, 2026-10-26): no device or port shared, failures isolated, no leaked sessions. Off by default. Under parallel load the emulator intermittently failed to start sessions because of its resource limits; see `CROSS_PLATFORM_DESIGN.md` §2.3 |
 | **Emulator execution in CI** | **Not implemented** — next step described above |
 | **iOS support** | **Design only, not implemented or tested.** No iOS build, XCUITest configuration or iOS code; see `CROSS_PLATFORM_DESIGN.md` §3 |
-| **Cloud device execution** | **Investigated, not executed.** No account used. The capability-logging prerequisite it identified is now fixed |
+| **Cloud device execution** | **Design only, not implemented.** No vendor capabilities, credential handling or hub configuration exist and no cloud session has been created. The logging prerequisites (capability allowlist, URL masking) are in place |
 
 **Other limitations.** Verification covers one emulator and one phone, both forced to en-GB. The expected
 listing data is tied to this APK build. Retry absorbs only the listed environmental exceptions; anything else

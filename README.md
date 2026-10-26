@@ -72,7 +72,9 @@ Page classes hold locators and interactions but no assertions; step definitions 
 ## Configuration
 
 Defaults live in `src/test/resources/config/config.properties`. Override any key for a single run with
-`-Dkey=value`; command-line values win over the file.
+`-Dkey=value`; command-line values win over the file. Never pass credentials this way: Surefire writes every
+`-D` property into `target/surefire-reports/TEST-TestSuite.xml`. The framework masks any `user:password@` part
+of `appium.server.url` in its own logs and errors, but cannot mask Surefire's record.
 
 | Key | Default | Purpose |
 |---|---|---|

@@ -45,7 +45,7 @@ public final class DriverManager {
             DevicePool.Device device = DevicePool.claim();
             options.setUdid(device.udid()).setSystemPort(device.systemPort());
         }
-        LOG.info("Creating Android session on {} with capabilities {}", serverUrl, loggableCapabilities(options));
+        LOG.info("Creating Android session on {} with capabilities {}", redacted(serverUrl.toString()), loggableCapabilities(options));
         try {
             AndroidDriver driver = new AndroidDriver(serverUrl, options);
             LOG.info("Session {} started on device {}", driver.getSessionId(), driver.getCapabilities().getCapability("deviceUDID"));
@@ -54,7 +54,7 @@ public final class DriverManager {
             // No session exists, so quitDriver() will not run for it; return the device here instead.
             DevicePool.release();
             if (e instanceof WebDriverException) {
-                throw new IllegalStateException("Could not start an Appium session on " + serverUrl
+                throw new IllegalStateException("Could not start an Appium session on " + redacted(serverUrl.toString())
                         + ". Is the Appium server running and the device listed by 'adb devices'?", e);
             }
             throw e;
@@ -137,12 +137,21 @@ public final class DriverManager {
         return loggable;
     }
 
+    /**
+     * The server URL with any {@code user:password@} part masked. Cloud device hubs are often addressed with the
+     * credentials in the URL, so the URL is never logged or put in an exception message unmasked.
+     */
+    static String redacted(String url) {
+        return url.replaceAll("(?<=://)[^/@]+@", "***@");
+    }
+
     private static URL serverUrl() {
         String url = ConfigManager.get("appium.server.url");
         try {
             return URI.create(url).toURL();
         } catch (IllegalArgumentException | MalformedURLException e) {
-            throw new IllegalStateException("Invalid appium.server.url: " + url, e);
+            // The parsing error's own message repeats the raw URL, so it is not attached as the cause.
+            throw new IllegalStateException("Invalid appium.server.url: " + redacted(url) + " (" + e.getClass().getSimpleName() + ")");
         }
     }
 }
