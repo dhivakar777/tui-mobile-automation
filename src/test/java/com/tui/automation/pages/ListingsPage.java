@@ -14,6 +14,7 @@ import org.openqa.selenium.interactions.Sequence;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -41,6 +42,7 @@ public class ListingsPage extends BasePage {
     private static final String CARD_TAG_PREFIX = "content_card_";
     private static final int MAX_SCROLLS = 60;
     private static final int STALE_READ_ATTEMPTS = 3;
+    private static final int MAX_RECOVERY_DRAGS = 3;
     private static final Duration SCROLL_DURATION = Duration.ofMillis(400);
     private static final Duration SCROLL_SETTLE = Duration.ofMillis(150);
 
@@ -69,7 +71,7 @@ public class ListingsPage extends BasePage {
             if (afterScroll.equals(visible)) {
                 return new ArrayList<>(namesByIndex.values());
             }
-            visible = afterScroll;
+            visible = recoverSkippedCards(namesByIndex, afterScroll);
         }
         throw new IllegalStateException("List did not reach its end within " + MAX_SCROLLS + " scrolls");
     }
@@ -95,6 +97,33 @@ public class ListingsPage extends BasePage {
         throw new IllegalStateException("Listing card " + index + " was not found after scrolling the list");
     }
 
+    /**
+     * Under heavy load a single drag can carry a card past the screen between two reads. If the cards now on screen
+     * start more than one index after the last card collected, drags back a short way until the missed cards have
+     * been read. Returns what is on screen afterwards.
+     */
+    private Map<Integer, VisibleName> recoverSkippedCards(Map<Integer, String> collected, Map<Integer, VisibleName> onScreen) {
+        for (int attempt = 0; attempt < MAX_RECOVERY_DRAGS && skipsCards(collected, onScreen); attempt++) {
+            LOG.debug("Cards skipped between {} and {}; scrolling back", lastIndex(collected), firstIndex(onScreen));
+            scroll(0.35, 0.65);
+            onScreen = visibleCardNames();
+            onScreen.forEach((index, name) -> collected.put(index, name.text()));
+        }
+        return onScreen;
+    }
+
+    private static boolean skipsCards(Map<Integer, String> collected, Map<Integer, VisibleName> onScreen) {
+        return !collected.isEmpty() && !onScreen.isEmpty() && firstIndex(onScreen) > lastIndex(collected) + 1;
+    }
+
+    private static int lastIndex(Map<Integer, String> collected) {
+        return Collections.max(collected.keySet());
+    }
+
+    private static int firstIndex(Map<Integer, VisibleName> onScreen) {
+        return Collections.min(onScreen.keySet());
+    }
+
     private boolean isSelected(Tab tab) {
         return Boolean.parseBoolean(driver.findElement(byTag(tab.tag)).getAttribute("selected"));
     }
@@ -102,18 +131,26 @@ public class ListingsPage extends BasePage {
     /**
      * Card names on screen with their vertical position. The position matters for end-of-list detection:
      * a tall card's name can stay visible after a real scroll, so only "same cards at the same place" means the
-     * list did not move.
+     * list did not move. Reads that the lazy list invalidates part-way through are repeated.
      */
     private Map<Integer, VisibleName> visibleCardNames() {
         for (int attempt = 1; ; attempt++) {
             try {
                 Map<Integer, VisibleName> visible = new TreeMap<>();
                 for (WebElement name : driver.findElements(CARD_NAMES)) {
-                    visible.put(cardIndex(name), new VisibleName(name.getText(), name.getRect().y));
+                    int index = cardIndex(name);
+                    VisibleName read = new VisibleName(name.getText(), name.getRect().y);
+                    // The id and the text are separate requests; if the lazy list reused this node for another card
+                    // in between, the text belongs to a different card. Treat that like a stale read.
+                    if (cardIndex(name) != index) {
+                        throw new StaleElementReferenceException("Card node was reused while it was being read");
+                    }
+                    visible.put(index, read);
                 }
                 return visible;
             } catch (StaleElementReferenceException e) {
-                // The lazy list recomposed while it was being read; read the screen again.
+                // The lazy list recomposed or reused a node while it was being read; read the screen again.
+                LOG.debug("Re-reading visible cards (attempt {}): {}", attempt, e.getMessage().lines().findFirst().orElse(""));
                 if (attempt == STALE_READ_ATTEMPTS) {
                     throw e;
                 }
@@ -126,13 +163,20 @@ public class ListingsPage extends BasePage {
 
     /**
      * Drags the list up by 60% of its height; the overlap between screens keeps card names from being skipped.
-     * The pause before release stops the list from flinging.
      */
     private void scrollDown() {
+        scroll(0.8, 0.2);
+    }
+
+    /**
+     * Drags a finger from one fraction of the list's height to another: upwards scrolls the list down, downwards
+     * scrolls it back. The pause before release stops the list from flinging.
+     */
+    private void scroll(double fromFraction, double toFraction) {
         Rectangle list = waitForVisible(LIST).getRect();
         int x = list.x + list.width / 2;
-        int startY = list.y + (int) (list.height * 0.8);
-        int endY = list.y + (int) (list.height * 0.2);
+        int startY = list.y + (int) (list.height * fromFraction);
+        int endY = list.y + (int) (list.height * toFraction);
         PointerInput finger = new PointerInput(PointerInput.Kind.TOUCH, "finger");
         Sequence drag = new Sequence(finger, 0)
                 .addAction(finger.createPointerMove(Duration.ZERO, PointerInput.Origin.viewport(), x, startY))

@@ -27,6 +27,8 @@ public class Hooks {
         ThreadContext.put("scenario", scenario.getName());
         LOG.info("Starting scenario '{}' {}", scenario.getName(), scenario.getSourceTagNames());
         DriverManager.startDriver();
+        // Adds the device to every log line, so interleaved output from concurrent scenarios stays traceable.
+        ThreadContext.put("device", DriverManager.deviceId());
     }
 
     /**
@@ -52,7 +54,9 @@ public class Hooks {
             byte[] png = DriverManager.getDriver().getScreenshotAs(OutputType.BYTES);
             scenario.attach(png, "image/png", "Failure screenshot");
             Files.createDirectories(SCREENSHOT_DIR);
-            Path file = SCREENSHOT_DIR.resolve(LocalDateTime.now().format(TIMESTAMP) + "_" + fileSafe(scenario.getName()) + ".png");
+            // The device id keeps simultaneous failures on different devices from colliding.
+            Path file = SCREENSHOT_DIR.resolve(LocalDateTime.now().format(TIMESTAMP) + "_" + fileSafe(DriverManager.deviceId())
+                    + "_" + fileSafe(scenario.getName()) + ".png");
             Files.write(file, png);
             LOG.info("Failure screenshot saved to {}", file);
         } catch (Exception e) {

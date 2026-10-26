@@ -19,7 +19,8 @@ builds. `maven-enforcer-plugin` fails the build on divergent transitive versions
 ```
 src/test/java/com/tui/automation/
   config/           ConfigManager          settings: config.properties, overridable with -D
-  driver/           DriverManager          Appium session lifecycle, ThreadLocal driver
+  driver/           DriverManager,         Appium session lifecycle, ThreadLocal driver;
+                    DevicePool             device and port allocation for parallel runs
   pages/            BasePage, LoginPage,   locators and UI interaction
                     ListingsPage, ListingCard
   hooks/            Hooks                  per-scenario start/teardown, failure screenshot
@@ -122,6 +123,10 @@ Two decisions shaped the implementation:
 - **End-of-list detected by card index *and* screen position.** Index alone ended collection one card early,
   because a tall card's name remains visible at a new position after a genuine scroll. A stale-element re-read
   was also needed, since the lazy list can recompose between finding an element and reading it.
+- **Protections against load-induced misreads.** Parallel runs showed that a single drag can carry a card past the
+  screen, and that a card's screen node can be reused for another card between reading its id and its text. The
+  page drags back a short way whenever the next visible card is more than one index ahead, and re-reads the
+  screen if a node's id changes during a read. Neither changes what the assertions check.
 
 Trade-off: collecting three tabs takes roughly 115 s. Shorter, faster drags were measured and rejected because
 they raise the risk of skipping a card, and the exact-list assertion was judged more valuable than the time.
@@ -154,7 +159,8 @@ and reviewed the generated code rather than accepting it as produced.
 | `BasePage` responsibilities | Options and trade-offs presented by AI; **selection by the engineer** |
 | Removing the `DriverFactory` split, env-var layer, platform switch and configurable `noReset` | Proposed by AI in the commissioned review; **approved by the engineer** |
 | Scenario selection | Candidates proposed by AI from observed behaviour; **assessed and confirmed by the engineer** against release risk |
-| Deferring parallel execution, cloud and iOS; keeping the repository local until the engineer chose to publish it | Engineer's decisions |
+| Deferring cloud and iOS; keeping the repository local until the engineer chose to publish it | Engineer's decisions |
+| Parallel execution | Initially deferred by the engineer; later requested by the engineer, designed and implemented by AI, and validated on an emulator and a phone, with the engineer deciding how the results are documented |
 | RetryAnalyzer and the CI workflow | Initially deferred by the engineer; later implemented by AI in response to external review feedback that the engineer supplied, with the engineer setting the priorities and acceptance criteria |
 | Fixes after external review: locale pin, retry, failure screenshots on disk, build workflow, capability-logging allowlist | Implemented and verified by AI against the engineer's brief; the engineer reviewed the validation report and requested a further review of retry reporting |
 | Added assertion that the listings screen is displayed after login | Requested by the engineer during a focused review |
@@ -210,13 +216,14 @@ fails the build if any feature step lacks a definition. Reports are uploaded eve
 no emulator and runs no UI test. The workflow passes `actionlint`, and it **passed on GitHub Actions** on
 2026-10-26 (run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288), commit `17dd197`), with every step successful and the reports artifact uploaded.
 
-**Design only — parallel execution, iOS, cloud and UI tests in CI.** None is implemented or tested. The full
-design is in `CROSS_PLATFORM_DESIGN.md`; the decisions that shape it are:
+**Parallel execution — implemented, isolation validated locally; off by default.** iOS, cloud and UI tests in CI
+remain design only. Details, validation and known limitations are in `CROSS_PLATFORM_DESIGN.md`; the decisions
+that shape them are:
 
 | Decision | Reason | Trade-off |
 |---|---|---|
-| Parallelism through Cucumber's `scenarios()` data provider, bounded by device count, default 1 | All scenarios run through one TestNG method, so the data provider is the only place to parallelise scenarios; a default of 1 keeps runs sequential unless requested | Needs a thread count and device list configured together |
-| Device and `systemPort` allocated together from a pool, claimed in `@Before` and released in `finally` | `ThreadLocal` only separates driver references; without allocation every thread would target the same device and could collide on the UiAutomator2 port | More moving parts in session setup |
+| Parallelism through Cucumber's `scenarios()` data provider, bounded by `parallel.threads`, default 1 (implemented) | All scenarios run through one TestNG method, so the data provider is the only place to parallelise scenarios; a default of 1 keeps runs sequential unless requested | Needs a thread count and device list configured together |
+| Device and `systemPort` allocated together from `DevicePool`, claimed at session start and released in `finally` (implemented) | `ThreadLocal` only separates driver references; without allocation every thread would target the same device and could collide on the UiAutomator2 port | More moving parts in session setup |
 | Platform chosen by `-Dplatform`, with a `DriverFactory` split per platform | The factory split was removed when only Android existed; a second, genuinely different options builder is what justifies it | Reintroduces a class removed during review |
 | Shared feature files, steps and assertions; locators and some page methods per platform | The scenarios are written in business terms, but Compose test tags and iOS accessibility identifiers are located differently, and date entry and masked-field detection differ in interaction | Page classes gain platform branches where screens differ |
 | Platform-specific values only through test-data overrides; unsupported scenarios excluded by tag | Keeps assertions identical across platforms instead of weakening them | Requires per-platform data files once values diverge |
@@ -258,8 +265,8 @@ committed `TUIChallengeApp.zip` once its use is confirmed. A cold emulator may n
 | Safe capability logging | Implemented, verified in the session log |
 | **CI workflow** | **Implemented and CI-validated (build validation only).** Passed on GitHub Actions; no UI tests in CI |
 | `.gitignore` hygiene; no secrets committed | Implemented. History pattern-scanned for credentials; not a full audit |
-| **ThreadLocal driver management** | **Implemented, not tested concurrently** — only ever run single-threaded, so thread safety is unverified |
-| **Parallel execution** | **Design only, not implemented.** Needs a parallel data provider, a device pool and a unique `systemPort` per session; see `CROSS_PLATFORM_DESIGN.md` §2 |
+| **ThreadLocal driver management** | **Implemented, exercised with 2 concurrent threads** — combined with the device pool, sessions stayed on separate devices and ports |
+| **Parallel execution** | **Implemented; isolation validated locally** (emulator + phone, 2026-10-26): no device or port shared, failures isolated, no leaked sessions. Off by default. Under parallel load the emulator intermittently failed to start sessions because of its resource limits; see `CROSS_PLATFORM_DESIGN.md` §2.3 |
 | **Emulator execution in CI** | **Not implemented** — next step described above |
 | **iOS support** | **Design only, not implemented or tested.** No iOS build, XCUITest configuration or iOS code; see `CROSS_PLATFORM_DESIGN.md` §3 |
 | **Cloud device execution** | **Investigated, not executed.** No account used. The capability-logging prerequisite it identified is now fixed |

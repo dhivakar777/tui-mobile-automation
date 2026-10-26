@@ -42,12 +42,13 @@ Cucumber BDD and Maven. Five scenarios cover the login screen and the travel lis
 pom.xml                      Build, pinned dependency versions, enforcer rules
 README.md                    This file
 DECISIONS.md                 Design decisions and requirement status
-CROSS_PLATFORM_DESIGN.md     Parallel, iOS, cloud and CI-matrix design (design only)
+CROSS_PLATFORM_DESIGN.md     Parallel execution (implemented) and iOS, cloud, CI-matrix design
 evidence/                    Reports, logs and screenshots from documented runs
 .github/workflows/build.yml  CI: compile and Gherkin validation (no UI tests)
 src/test/java/com/tui/automation/
   config/ConfigManager       Reads config.properties; any key can be overridden with -Dkey=value
   driver/DriverManager       Creates, exposes and ends the Appium session (one driver per thread)
+  driver/DevicePool          Gives each parallel scenario its own device and UiAutomator2 port
   pages/BasePage             Shared driver, explicit wait, Compose test-tag locator
   pages/LoginPage            Login form, password toggle, date-of-birth dialog
   pages/ListingsPage         Category tabs and listing cards, including list scrolling
@@ -83,6 +84,8 @@ Defaults live in `src/test/resources/config/config.properties`. Override any key
 | `device.language`, `device.locale` | `en`, `GB` | Device locale for the session. The app formats dates and prices from it, and the test data expects en-GB. Appium leaves the device in this locale afterwards; blank both to keep the device's own |
 | `retry.max.retries` | `1` | Extra attempts for a scenario that fails with an environmental error; `0` disables retry |
 | `timeout.explicit.wait.seconds` | `15` | Explicit wait for elements; raise it on slow emulators |
+| `device.udids` | *(blank)* | Devices to share between concurrent scenarios, comma-separated; use instead of `device.udid` for parallel runs |
+| `parallel.threads` (Maven property) | `1` | Scenarios run at once. `1` keeps the suite sequential; must not exceed the devices in `device.udids` |
 
 ### Supplying the APK
 
@@ -124,6 +127,18 @@ mvn clean test -Dtimeout.explicit.wait.seconds=30     # slower emulators
 ```
 
 Each scenario gets a fresh session with the app data cleared, so scenarios can run in any order.
+
+### Parallel execution
+
+Run scenarios concurrently across several devices, one device per thread:
+
+```bash
+mvn clean test -Ddevice.udids=emulator-5554,<phone-udid> -Dparallel.threads=2
+```
+
+Each scenario claims a free device and its own UiAutomator2 port, and returns it when its session ends. Log
+lines and failure screenshot names include the device id. The isolation mechanism has been validated locally on
+an emulator and a phone; see *Current limitations* for the emulator's resource limits.
 
 ### Tagged execution
 
@@ -221,24 +236,21 @@ itself uses; that can differ from your shell's `java -version`.
 
 ## Future work (design only)
 
-Neither of these is implemented, configured or tested. The full design, risks and validation plan are in
-`CROSS_PLATFORM_DESIGN.md`.
+Not implemented, configured or tested. The design, risks and validation plan are in `CROSS_PLATFORM_DESIGN.md`.
 
-- **Parallel Android execution.** Scenarios would run concurrently through Cucumber's TestNG data provider, with
-  the worker count bounded by the number of devices and defaulting to 1. Each worker would claim its own device
-  and UiAutomator2 `systemPort` from a pool. `DriverManager`'s `ThreadLocal` is a precondition only; it does not
-  make the suite parallel or prove it thread-safe.
 - **iOS.** A `-Dplatform=android|ios` switch and a per-platform driver factory would add an `IOSDriver` /
   XCUITest branch beside today's Android one. It would need macOS, Xcode, a simulator or registered device, an
   iOS build of the app and WebDriverAgent signing for real devices. Locators would be resolved per platform,
   because Compose test tags and iOS accessibility identifiers are located differently.
+- **Cloud devices** and **UI tests in CI.**
 
 ## Current limitations
 
 - **Android only.** iOS, device clouds and cross-platform execution are design-only; see `CROSS_PLATFORM_DESIGN.md`.
 - **CI validates the build only.** The workflow passes on GitHub Actions, but no UI tests run in CI.
-- **Parallel execution is not implemented.** `DriverManager` keeps one driver per thread, which is a
-  precondition, but parallel execution has never been enabled or verified. Single device, single thread today.
+- **Parallel execution is off by default.** The device and port isolation was validated on an emulator and a
+  phone. Under parallel load the emulator (2.5 GB RAM) intermittently failed to start sessions — an emulator
+  limitation; see `CROSS_PLATFORM_DESIGN.md` §2.3.
 - **Validated on two devices:** an Android emulator (API 35) and a OnePlus Nord CE (EB2101, Android 13), both
   in en-GB.
 - **Scenarios depend on the app's bundled data.** `testdata/listings.json` was extracted from the APK's
