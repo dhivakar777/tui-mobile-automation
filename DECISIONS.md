@@ -251,7 +251,7 @@ committed `TUIChallengeApp.zip` once its use is confirmed. A cold emulator may n
 | Default `mvn clean test` | OnePlus Nord CE (EB2101), Android 13, en-GB | 5 run, 0 failures, 149.7 s | Console output only |
 | Temporary retry check (removed afterwards) | Emulator | Environmental failure retried once and passed; assertion failure ran once and failed; `retry.max.retries=0` disabled retry | Not committed |
 | Temporary screenshot-resilience check (removed afterwards) | Phone | Screenshot saved; with the session killed, capture failed with a warning, teardown ran and the original failure was reported | Not committed |
-| Default `mvn clean test` (2026-10-29) | OnePlus Nord CE (EB2101), Android 13, en-GB | 5 scenarios passed, no retries; 14 tests run including 9 unit tests, 0 failures, 3:20 min | `evidence/passing-run/` — report, log |
+| Default `mvn clean test` (2026-10-29) | OnePlus Nord CE (EB2101), Android 13, en-GB | 5 scenarios passed, no retries; 14 tests run including 9 unit tests, 0 failures, 2:58 min | `evidence/passing-run/` — report, log, screenshots |
 | Build workflow on GitHub Actions (2026-10-26) | GitHub-hosted `ubuntu-latest` runner | All steps passed: compile, enforcer rules, Cucumber dry run (5 scenarios), report upload | run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288) |
 
 | Requirement | Status |
