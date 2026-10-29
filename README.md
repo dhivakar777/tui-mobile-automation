@@ -181,7 +181,7 @@ mvn clean test -Dcucumber.filter.tags="@login or @listings"
 | Console log | INFO level, in the terminal |
 | TestNG/Surefire output | `target/surefire-reports/` |
 | Appium server log | Wherever the server was started, e.g. `appium --log /tmp/appium.log` |
-| Committed evidence | `evidence/passing-run/` and `evidence/failure-reproduction/` (with screenshots); see `evidence/README.md` |
+| Committed evidence | `evidence/passing-run/` (report, log and screenshots); see `evidence/README.md` |
 
 Open the report with `open target/cucumber-reports/cucumber.html`. `mvn clean` deletes `target/`, so copy
 anything you need to keep.

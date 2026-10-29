@@ -241,16 +241,17 @@ committed `TUIChallengeApp.zip` once its use is confirmed. A cold emulator may n
 
 ## Validation and Requirement Status
 
-**What was actually run (2026-10-25)**, Appium 3.2.2 + UiAutomator2 7.0.0:
+**What was actually run (2026-10-25 unless dated)**, Appium 3.2.2 + UiAutomator2 7.0.0:
 
 | Run | Device | Result | Evidence |
 |---|---|---|---|
-| Reproduction of the reviewed failures, locale pin disabled (`-Ddevice.language= -Ddevice.locale=`) | Android emulator, API 35, en-US | 5 run, **2 failures** (`2009-07-08`, `$1,280`) | `evidence/failure-reproduction/` — report, log, 2 screenshots |
-| Default `mvn clean test`, emulator reset to en-US first | Same emulator | **5 run, 0 failures, 135.8 s**, no retries | `evidence/passing-run/` |
+| Reproduction of the reviewed failures, locale pin disabled (`-Ddevice.language= -Ddevice.locale=`) | Android emulator, API 35, en-US | 5 run, **2 failures** (`2009-07-08`, `$1,280`) | Console output and logs |
+| Default `mvn clean test`, emulator reset to en-US first | Same emulator | **5 run, 0 failures, 135.8 s**, no retries | Console output and logs |
 | Repeated default runs | Same emulator | Steady state (already en-GB): 5/5, no retries. Locale transitions from en-US: 4 of 6 passed; both failures came immediately after the emulator had stopped responding and was rebooted, when the first session reported `Cannot set the device locale` | Console output and logs |
 | Default `mvn clean test` | OnePlus Nord CE (EB2101), Android 13, en-GB | 5 run, 0 failures, 149.7 s | Console output only |
 | Temporary retry check (removed afterwards) | Emulator | Environmental failure retried once and passed; assertion failure ran once and failed; `retry.max.retries=0` disabled retry | Not committed |
 | Temporary screenshot-resilience check (removed afterwards) | Phone | Screenshot saved; with the session killed, capture failed with a warning, teardown ran and the original failure was reported | Not committed |
+| Default `mvn clean test` (2026-10-29) | OnePlus Nord CE (EB2101), Android 13, en-GB | 5 scenarios passed, no retries; 14 tests run including 9 unit tests, 0 failures, 3:20 min | `evidence/passing-run/` — report, log |
 | Build workflow on GitHub Actions (2026-10-26) | GitHub-hosted `ubuntu-latest` runner | All steps passed: compile, enforcer rules, Cucumber dry run (5 scenarios), report upload | run [40320669288](https://github.com/dhivakar777/tui-mobile-automation/actions/runs/40320669288) |
 
 | Requirement | Status |
